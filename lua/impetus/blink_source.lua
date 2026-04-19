@@ -36,7 +36,7 @@ function Source:enabled()
 end
 
 function Source:get_trigger_characters()
-  return { "*", "%", "[" }
+  return { "*", "%", "[", "," }
 end
 
 function Source:get_completions(context, resolve)
@@ -46,8 +46,9 @@ function Source:get_completions(context, resolve)
   local start_col = find_start_col(line, cur_col)
   local base = line:sub(start_col + 1, cur_col)
   local keyword_ctx = is_keyword_context(line, cur_col)
+  local is_comma_trigger = context.trigger and context.trigger.kind == 2 and context.trigger.character == ","
 
-  if not keyword_ctx and #base < (self.opts.min_keyword_length or 1) then
+  if not keyword_ctx and not is_comma_trigger and #base < (self.opts.min_keyword_length or 1) then
     resolve({ is_incomplete_forward = false, is_incomplete_backward = false, items = {} })
     return
   end

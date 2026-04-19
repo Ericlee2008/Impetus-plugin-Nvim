@@ -14,6 +14,9 @@ local function split_csv_keep_empty(line)
   for part in s:gmatch("(.-),") do
     out[#out + 1] = trim(part)
   end
+  while #out > 0 and out[#out] == "" do
+    out[#out] = nil
+  end
   return out
 end
 
@@ -650,7 +653,7 @@ function M.is_valid_data_line(keyword, row_index, line, entry)
       return false
     end
     return (#fields < 2 or is_numericish_expr(fields[2]))
-      and (#fields < 3 or trim(fields[3]) == "" or trim(fields[3]) == "-")
+      and (#fields < 3 or is_blank_or_expr(fields[3]))
       and (#fields < 4 or is_blank_or_expr(fields[4]))
       and (#fields < 5 or is_blank_or_expr(fields[5]))
       and (#fields < 6 or is_blank_or_expr(fields[6]))
@@ -1532,7 +1535,7 @@ function M.is_valid_data_line(keyword, row_index, line, entry)
   end
 
   if kw == "*CONTACT_ACCURACY" then
-    return #fields >= 1 and #fields <= 3 and all_fields_match(fields, is_blank_or_expr)
+    return #fields >= 1 and #fields <= 8 and all_fields_match(fields, is_blank_or_expr)
   end
 
   if kw == "*CONTACT_REBAR" then

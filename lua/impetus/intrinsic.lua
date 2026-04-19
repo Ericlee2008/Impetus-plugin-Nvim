@@ -140,18 +140,22 @@ function M.apply_syntax_for_current_buffer()
 
   if #d.funcs > 0 then
     for _, fn in ipairs(d.funcs) do
-      vim.cmd("silent! syntax match impetusIntrinsicFunction /\\<" .. vim.pesc(fn) .. "\\>\\ze\\s*(/ containedin=ALLBUT,impetusComment,impetusString")
+      vim.cmd("silent! syntax match impetusIntrinsicFunction /\\c\\<" .. vim.pesc(fn) .. "\\>\\ze\\s*(/ containedin=ALLBUT,impetusComment,impetusString")
     end
   end
   if #d.vars > 0 then
-    vim.cmd("silent! syntax keyword impetusIntrinsicVariable " .. table.concat(d.vars, " "))
+    for _, var in ipairs(d.vars) do
+      vim.cmd("silent! syntax match impetusIntrinsicVariable /\\c\\<" .. vim.pesc(var) .. "\\>/ containedin=ALLBUT,impetusComment,impetusString")
+    end
   end
   local symbols = d.symbols or { ops = {}, words = {} }
   local sym_words = symbols.words or {}
   local sym_ops = symbols.ops or {}
 
   if #sym_words > 0 then
-    vim.cmd("silent! syntax keyword impetusIntrinsicSymbol " .. table.concat(sym_words, " "))
+    for _, word in ipairs(sym_words) do
+      vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\c\\<" .. vim.pesc(word) .. "\\>/ containedin=ALLBUT,impetusComment,impetusString")
+    end
   end
   if #sym_ops > 0 then
     for _, op in ipairs(sym_ops) do

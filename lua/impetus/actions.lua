@@ -1257,7 +1257,9 @@ local function collect_rows_for_smart_uncomment(lines, block)
       got_title = true
       return accept()
     elseif expected_data <= 0 then
-      if not is_preview_meta(preview) then
+      -- Known keywords with 0 data rows (e.g. *END_PARAMETER): accept nothing after the keyword line.
+      -- Unknown keywords (entry == nil): accept any non-meta row (can't validate).
+      if not entry and not is_preview_meta(preview) then
         return accept()
       end
       return false
@@ -1393,6 +1395,7 @@ local function build_uncomment_row_set(lines, block)
     or (block.keyword or ""):upper() == "*OUTPUT_SENSOR"
     or (block.keyword or ""):upper() == "*GEOMETRY_SEED_COORDINATE"
     or (block.keyword or ""):upper() == "*MERGE_DUPLICATED_NODES"
+    or (block.keyword or ""):upper() == "*PART"
     or (block.keyword or ""):upper() == "*CURVE"
   then
     for rr = block.start_row + 1, block.end_row do
@@ -1815,6 +1818,22 @@ function M.toggle_comment_block()
           end
         end
       end
+      if not do_uncomment and (block.keyword or ""):upper() == "*PART" then
+        for rr = block.start_row + 1, block.end_row do
+          local raw = full_lines[rr] or ""
+          if is_commented_line(raw) then
+            local preview = uncomment_one_level(raw)
+            local pt = trim(strip_number_prefix(preview))
+            if pt ~= ""
+              and not is_preview_meta(preview)
+              and schema.is_valid_data_line(block.keyword, 1, pt, block_entry)
+            then
+              do_uncomment = true
+              break
+            end
+          end
+        end
+      end
     end
   end
 
@@ -1916,6 +1935,41 @@ function M.toggle_comment_block()
       end
     end
 
+    if (block.keyword or ""):upper() == "*PART" then
+      local released_any = false
+      for i, l in ipairs(lines) do
+        local abs_row = block.start_row + i - 1
+        if abs_row > block.start_row and is_commented_line(l) then
+          local preview = uncomment_one_level(l)
+          local pt = trim(strip_number_prefix(preview))
+          if pt ~= ""
+            and not is_preview_meta(preview)
+            and schema.is_valid_data_line(block.keyword, 1, pt, block_entry)
+          then
+            lines[i] = preview
+            full_lines[abs_row] = preview
+            released_any = true
+          end
+        end
+      end
+      if not released_any then
+        for i, l in ipairs(lines) do
+          local abs_row = block.start_row + i - 1
+          if abs_row > block.start_row and is_commented_line(l) then
+            local preview = uncomment_one_level(l)
+            local pt = trim(strip_number_prefix(preview))
+            if pt ~= ""
+              and not is_preview_meta(preview)
+              and csv_field_count(pt) >= 2
+            then
+              lines[i] = preview
+              full_lines[abs_row] = preview
+            end
+          end
+        end
+      end
+    end
+
     if (block.keyword or ""):upper() == "*GEOMETRY_SEED_COORDINATE" then
       for i, l in ipairs(lines) do
         local abs_row = block.start_row + i - 1
@@ -1958,7 +2012,7 @@ function M.toggle_comment_block()
     end
 
     vim.api.nvim_buf_set_lines(buf, block.start_row - 1, block.end_row, false, lines)
-    set_cursor(row, col0)
+    goto_next_keyword_after(buf, block.end_row)
     return
   end
 
@@ -1970,7 +2024,7 @@ function M.toggle_comment_block()
     end
   end
   vim.api.nvim_buf_set_lines(buf, block.start_row - 1, block.end_row, false, lines)
-  set_cursor(row, col0)
+  goto_next_keyword_after(buf, block.end_row)
 end
 
 function M.delete_block()
@@ -2454,12 +2508,16 @@ function M.show_ref_completion()
       if inline_opt and inline_opt ~= "" then
         parse_option_content(inline_opt, add_item)
       end
-      local lhs, rhs = line_part:match("^%s*(.-)%s*%-%>%s*(.+)%s*$")
-      if lhs and rhs then
-        local key = normalize_popup_token((lhs or ""):match("^([^%s]+)") or "")
-        rhs = trim((rhs or ""):gsub("^%[+", ""):gsub("%]+$", ""))
-        if key ~= "" then
-          add_item(key, rhs, "mapping")
+      -- Only parse standalone `lhs -> rhs` lines, not lines that contain [options: ...]
+      -- (those are already handled by parse_option_content above and the lhs would be polluted)
+      if not line_part:match("%[options:") then
+        local lhs, rhs = line_part:match("^%s*(.-)%s*%-%>%s*(.+)%s*$")
+        if lhs and rhs then
+          local key = normalize_popup_token((lhs or ""):match("^([^%s]+)") or "")
+          rhs = trim((rhs or ""):gsub("^%[+", ""):gsub("%]+$", ""))
+          if key ~= "" then
+            add_item(key, rhs, "mapping")
+          end
         end
       end
     end
@@ -2636,15 +2694,21 @@ end
 function M.open_in_gui()
   local exe = vim.g.impetus_gui_exe
   if not exe or exe == "" then
-    vim.notify("Set g:impetus_gui_exe first", vim.log.levels.WARN)
+    vim.notify("impetus: set vim.g.impetus_gui_exe to the GUI executable path", vim.log.levels.WARN)
     return
   end
   local file = vim.fn.expand("%:p")
   if file == "" then
+    vim.notify("impetus: no file in current buffer", vim.log.levels.WARN)
     return
   end
   if vim.fn.has("win32") == 1 then
-    vim.fn.jobstart({ "cmd", "/c", "start", "", exe, file }, { detach = true })
+    -- Pass as a string so cmd.exe /c correctly handles paths with spaces
+    local cmd = string.format('start "" "%s" "%s"', exe, file)
+    local ret = vim.fn.jobstart(cmd, { detach = true })
+    if ret <= 0 then
+      vim.notify("impetus: GUI launch failed — check vim.g.impetus_gui_exe", vim.log.levels.ERROR)
+    end
   else
     vim.fn.jobstart({ exe, file }, { detach = true })
   end

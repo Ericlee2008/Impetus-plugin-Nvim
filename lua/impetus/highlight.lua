@@ -10,18 +10,18 @@ local palette = {
   control_mid = "#ffd166",
   control_end = "#ff6b6b",
   directive = "#00d7ff",
-  param = "#4cff7a",
+  param = "#c9a227",
   repeat_var = "#ffffff",
   number = "#ff3030",
   comment = "#a8a8a8",
   string = "#9a9a9a",
-  header = "#00ffff",
+  header = "#2355b4",
   options = "#00c86f",
   default = "#00c86f",
   field = "#ffffff",
-  intrinsic_func = "#ffd166",
-  intrinsic_var = "#7ee8ff",
-  intrinsic_symbol = "#7ee8ff",
+  intrinsic_func = "#00a35a",
+  intrinsic_var = "#00a35a",
+  intrinsic_symbol = "#00a35a",
   divider = "#d7d7d7",
   example = "#c0c0c0",
   empty_field_bg = "#2b3f78",
@@ -58,6 +58,7 @@ local pair_palette = {
 }
 
 function M.apply()
+  hi("Keyword", { fg = palette.keyword, bold = true })
   hi("impetusKeyword", { fg = palette.keyword, bold = true })
   hi("impetusControlStart", { fg = palette.control_start, bold = true })
   hi("impetusControlMid", { fg = palette.control_mid, bold = true, italic = true })

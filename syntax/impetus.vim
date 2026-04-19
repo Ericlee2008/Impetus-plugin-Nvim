@@ -2,7 +2,7 @@ if exists("b:current_syntax")
   finish
 endif
 
-syntax match impetusKeyword /^\s*\(\d\+\.\s*\)\?\*[A-Z0-9_-]\+/
+syntax match impetusKeyword /^\s*\(\d\+\.\s*\)\?\*[A-Za-z0-9_-]\+/
 syntax match impetusControlStart /^\s*\~\(if\|repeat\|convert_from_[A-Za-z0-9_]*\)\>/
 syntax match impetusControlMid /^\s*\~\(else_if\|else\)\>/
 syntax match impetusControlEnd /^\s*\~\(end_if\|end_repeat\|end_convert\)\>/

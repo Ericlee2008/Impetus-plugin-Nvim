@@ -39,6 +39,45 @@ local function parse_parameter_name(line)
   return name
 end
 
+local function looks_like_trailing_placeholder_line(line)
+  local t = line or ""
+  return t:match("^[ \t]*,[ \t]*$") ~= nil
+end
+
+local function restore_if_nav_open_added_placeholder(buf, file_path)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  if not file_path or file_path == "" or vim.fn.filereadable(file_path) ~= 1 then
+    return
+  end
+  if not vim.bo[buf].modified then
+    return
+  end
+
+  local ok_disk, disk_lines = pcall(vim.fn.readfile, file_path)
+  if not ok_disk or type(disk_lines) ~= "table" then
+    return
+  end
+
+  local buf_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  if #buf_lines ~= (#disk_lines + 1) then
+    return
+  end
+  if not looks_like_trailing_placeholder_line(buf_lines[#buf_lines]) then
+    return
+  end
+
+  for i = 1, #disk_lines do
+    if (buf_lines[i] or "") ~= (disk_lines[i] or "") then
+      return
+    end
+  end
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, disk_lines)
+  vim.bo[buf].modified = false
+end
+
 local function split_csv(line)
   local out = {}
   local text = trim(strip_number_prefix(line or ""))
@@ -686,7 +725,7 @@ local function ensure_pane(source_buf, source_win)
   vim.wo[win].signcolumn = "no"
   vim.wo[win].cursorline = false
   vim.wo[win].wrap = false
-  vim.api.nvim_win_set_width(win, 74)
+  vim.api.nvim_win_set_width(win, 52)
 
   state.pane = {
     win = win,
@@ -717,36 +756,40 @@ local function ensure_pane(source_buf, source_win)
     set_statusline_text(p, selected_label_from_target(target))
 
     local path = target.path and vim.fn.fnamemodify(target.path, ":p") or nil
-    local source_path = ""
-    if p.source_buf and vim.api.nvim_buf_is_valid(p.source_buf) then
-      source_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(p.source_buf), ":p")
-    end
+    local main_file = p.open_file and vim.fn.fnamemodify(p.open_file, ":p") or ""
+
+    -- Resolve main window: prefer p.main_win, fall back to p.source_win.
+    local main_win = (p.main_win and vim.api.nvim_win_is_valid(p.main_win)) and p.main_win
+      or (p.source_win and vim.api.nvim_win_is_valid(p.source_win)) and p.source_win
+      or nil
 
     local dst = nil
-    if path ~= "" and source_path ~= "" and path ~= source_path then
-      local existing = find_window_showing_path(path)
-      if existing and vim.api.nvim_win_is_valid(existing) then
-        dst = existing
-      end
-      if p.source_win and vim.api.nvim_win_is_valid(p.source_win) then
-        local src_buf = vim.api.nvim_win_get_buf(p.source_win)
-        local cc = vim.api.nvim_win_get_cursor(p.source_win)
+    local is_main_file = (not path or path == "" or (main_file ~= "" and path == main_file))
+
+    if is_main_file then
+      -- Same as root file (or no path): jump inside the main window.
+      dst = main_win
+    else
+      -- Different file: always use the single nav_win slot.
+      if main_win then
+        local cc = vim.api.nvim_win_get_cursor(main_win)
         p.return_cursor = {
-          win = p.source_win,
-          buf = src_buf,
-          row = cc[1],
-          col = cc[2],
+          win  = main_win,
+          buf  = vim.api.nvim_win_get_buf(main_win),
+          row  = cc[1],
+          col  = cc[2],
         }
       end
-      if not dst and p.nav_win and vim.api.nvim_win_is_valid(p.nav_win) then
+      if p.nav_win and vim.api.nvim_win_is_valid(p.nav_win) then
+        -- Reuse existing nav_win; content will be replaced below.
         dst = p.nav_win
-      elseif not dst then
-        local base_win = (p.source_win and vim.api.nvim_win_is_valid(p.source_win)) and p.source_win or p.main_win
-        if base_win and vim.api.nvim_win_is_valid(base_win) then
-          vim.api.nvim_set_current_win(base_win)
+      else
+        -- Create exactly one nav_win to the left of the main window.
+        local base = main_win
+        if base and vim.api.nvim_win_is_valid(base) then
+          vim.api.nvim_set_current_win(base)
         end
-        local ok = pcall(vim.cmd, "leftabove vsplit")
-        if ok then
+        if pcall(vim.cmd, "leftabove vsplit") then
           p.nav_win = vim.api.nvim_get_current_win()
           vim.w[p.nav_win].impetus_nav_window = 1
           dst = p.nav_win
@@ -755,7 +798,7 @@ local function ensure_pane(source_buf, source_win)
     end
 
     if not dst then
-      dst = (p.source_win and vim.api.nvim_win_is_valid(p.source_win)) and p.source_win or vim.api.nvim_get_current_win()
+      dst = main_win or vim.api.nvim_get_current_win()
     end
     vim.api.nvim_set_current_win(dst)
 
@@ -773,18 +816,7 @@ local function ensure_pane(source_buf, source_win)
 
   vim.keymap.set("n", "<CR>", jump_from_info, { buffer = buf, silent = true, desc = "Jump to keyword/file" })
   vim.keymap.set("n", "<2-LeftMouse>", jump_from_info, { buffer = buf, silent = true, desc = "Jump to keyword/file" })
-  vim.keymap.set("n", "<LeftRelease>", function()
-    local p = state.pane
-    if not p or not vim.api.nvim_win_is_valid(p.win) then
-      return
-    end
-    local lnum = vim.api.nvim_win_get_cursor(p.win)[1] - 1
-    local target = p.line_targets and p.line_targets[lnum] or nil
-    if target then
-      set_selected_line(p, lnum)
-      set_statusline_text(p, selected_label_from_target(target))
-    end
-  end, { buffer = buf, silent = true, desc = "Select info item" })
+  vim.keymap.set("n", "<LeftRelease>", jump_from_info, { buffer = buf, silent = true, desc = "Jump to keyword/file" })
 
   if vim.api.nvim_win_is_valid(prev_win) then
     vim.api.nvim_set_current_win(prev_win)
@@ -970,7 +1002,7 @@ local function render(source_buf, source_win)
   end
 
   local function add_stats_table_row(left_label, left_value, right_label, right_value)
-    local text = string.format("%-22s %-10s    %-22s %-10s", left_label, tostring(left_value), right_label, tostring(right_value))
+    local text = string.format("%-16s %-8s  %-15s %-8s", left_label, tostring(left_value), right_label, tostring(right_value))
     local lnum = add_line(text)
     local ll = text:find(left_label, 1, true)
     local lv = text:find(tostring(left_value), (ll or 1) + #left_label, true)
@@ -991,7 +1023,7 @@ local function render(source_buf, source_win)
   end
 
   add_line("MODEL INFORMATION", { group = "impetusHeader" })
-  add_line(string.rep("-", 60), { group = "impetusDivider" })
+  add_line(string.rep("-", 50), { group = "impetusDivider" })
   add_line("File: " .. vim.fn.fnamemodify(root.path, ":t"), { group = "impetusFieldName", target = { path = root.path, row = 1 } })
   add_stats_table_row("Commands (model)", model_stats.total, "Unique types", model_unique)
   add_stats_table_row("Included files", model_stats.include_files, "Parameters", model_stats.parameters)
@@ -1002,10 +1034,10 @@ local function render(source_buf, source_win)
   add_line("")
 
   add_line("FILE TREE", { group = "impetusOptions" })
-  add_line(string.rep("-", 60), { group = "impetusDivider" })
+  add_line(string.rep("-", 50), { group = "impetusDivider" })
 
   local function pad_right_stats(left, right, min_gap)
-    local total_width = 70
+    local total_width = 50
     local gap = min_gap or 2
     local left_w = vim.fn.strdisplaywidth(left)
     local right_w = vim.fn.strdisplaywidth(right)
@@ -1016,7 +1048,23 @@ local function render(source_buf, source_win)
   end
 
   local function fmt_stats(kw, uniq, lines_count)
-    return string.format("kw:%3d  uniq:%3d  lines:%9d", kw or 0, uniq or 0, lines_count or 0)
+    return string.format("%3d  %3d  %9d", kw or 0, uniq or 0, lines_count or 0)
+  end
+
+  do
+    local left = "file"
+    local right = " kw  uniq      lines"
+    local rendered = pad_right_stats(left, right, 3)
+    local lnum = add_line(rendered, { group = "impetusInfoStatLabel" })
+    local stats_col = rendered:find(right, 1, true)
+    if stats_col then
+      marks[#marks + 1] = {
+        group = "impetusInfoStatLabel",
+        lnum = lnum,
+        col_start = stats_col - 1,
+        col_end = stats_col - 1 + #right,
+      }
+    end
   end
 
   local file_tree_row_index = 0
@@ -1064,7 +1112,7 @@ local function render(source_buf, source_win)
   add_line("")
 
   add_line("COMMAND TREE", { group = "impetusDefault" })
-  add_line(string.rep("-", 60), { group = "impetusDivider" })
+  add_line(string.rep("-", 50), { group = "impetusDivider" })
 
   local function emit_keywords_for_file(node, prefix, is_last)
     if node.skipped then
@@ -1127,7 +1175,7 @@ local function render(source_buf, source_win)
   add_line("")
 
   add_line("PARAMETER TREE", { group = "impetusDefault" })
-  add_line(string.rep("-", 60), { group = "impetusDivider" })
+  add_line(string.rep("-", 50), { group = "impetusDivider" })
 
   local function emit_parameters_for_file(node, prefix, is_last)
     if node.skipped then
@@ -1317,6 +1365,114 @@ function M.get_debug_state()
   }
 end
 
+-- Open file_path in the nav_win (left split). Creates the split if needed.
+-- If file_path is already visible in any non-info window, reuses that window
+-- instead of opening another split. Returns true on success.
+function M.open_in_nav_win(file_path, row, col)
+  -- 1. If target file is already visible in some window, just go there.
+  if file_path and file_path ~= "" then
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_is_valid(win) then
+        local cfg = vim.api.nvim_win_get_config(win)
+        if not cfg.relative or cfg.relative == "" then
+          local wbuf = vim.api.nvim_win_get_buf(win)
+          if vim.b[wbuf].impetus_info_buffer ~= 1 then
+            local wfile = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(wbuf), ":p")
+            if wfile == file_path then
+              vim.api.nvim_set_current_win(win)
+              if row and row > 0 then
+                vim.api.nvim_win_set_cursor(0, { row, col or 0 })
+                vim.cmd("normal! zz")
+              end
+              return true
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- 2. File not visible: open in the nav_win slot, creating it if needed.
+  local pane = state.pane or recover_existing_pane()
+  local main_win = nil
+  if pane then
+    main_win = (pane.main_win and vim.api.nvim_win_is_valid(pane.main_win)) and pane.main_win
+      or (pane.source_win and vim.api.nvim_win_is_valid(pane.source_win)) and pane.source_win
+      or nil
+  end
+
+  local dst = nil
+  if pane and pane.nav_win and vim.api.nvim_win_is_valid(pane.nav_win) then
+    dst = pane.nav_win
+  else
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_is_valid(win) and vim.w[win].impetus_nav_window == 1 then
+        dst = win
+        break
+      end
+    end
+    if not dst then
+      local base = main_win
+      if not base then
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_is_valid(win) then
+            local cfg = vim.api.nvim_win_get_config(win)
+            if not cfg.relative or cfg.relative == "" then
+              local buf = vim.api.nvim_win_get_buf(win)
+              if vim.b[buf].impetus_info_buffer ~= 1
+                and vim.w[win].impetus_nav_window ~= 1
+                and vim.w[win].impetus_child_window ~= 1
+              then
+                base = win
+                break
+              end
+            end
+          end
+        end
+      end
+      if base then
+        vim.api.nvim_set_current_win(base)
+      end
+      if pcall(vim.cmd, "leftabove vsplit") then
+        dst = vim.api.nvim_get_current_win()
+        vim.w[dst].impetus_nav_window = 1
+        if pane then
+          pane.nav_win = dst
+        end
+      end
+    end
+  end
+
+  if not dst then
+    return false
+  end
+
+  vim.api.nvim_set_current_win(dst)
+  local opened_via_edit = false
+  if file_path and file_path ~= "" then
+    local cur = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p")
+    if cur ~= file_path then
+      local fbufnr = vim.fn.bufnr(file_path)
+      if fbufnr > 0 and vim.api.nvim_buf_is_loaded(fbufnr) then
+        vim.api.nvim_set_current_buf(fbufnr)
+      elseif vim.fn.filereadable(file_path) == 1 then
+        vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+        opened_via_edit = true
+      else
+        return false
+      end
+    end
+  end
+  if opened_via_edit then
+    restore_if_nav_open_added_placeholder(vim.api.nvim_get_current_buf(), file_path)
+  end
+  if row and row > 0 then
+    vim.api.nvim_win_set_cursor(0, { row, col or 0 })
+    vim.cmd("normal! zz")
+  end
+  return true
+end
+
 function M.setup()
   local group = vim.api.nvim_create_augroup("ImpetusInfoPane", { clear = true })
 
@@ -1328,12 +1484,15 @@ function M.setup()
         if not state.user_closed then
           local ft = vim.bo[ev.buf].filetype
           local cur_win = vim.api.nvim_get_current_win()
+          local _wcfg = vim.api.nvim_win_get_config(cur_win)
           if (ft == "impetus" or ft == "kwt")
             and vim.b[ev.buf].impetus_info_buffer ~= 1
+            and vim.b[ev.buf].impetus_help_buffer ~= 1
             and vim.b[ev.buf].impetus_child_buffer ~= 1
             and vim.w[cur_win].impetus_nav_window ~= 1
             and vim.w[cur_win].impetus_child_window ~= 1
             and vim.g.impetus_opening_child ~= 1
+            and (_wcfg.relative == nil or _wcfg.relative == "")
           then
             render(ev.buf, cur_win)
           end
@@ -1352,6 +1511,9 @@ function M.setup()
       if vim.b[ev.buf].impetus_info_buffer == 1 then
         return
       end
+      if vim.b[ev.buf].impetus_help_buffer == 1 then
+        return
+      end
       if vim.b[ev.buf].impetus_child_buffer == 1 then
         return
       end
@@ -1362,6 +1524,10 @@ function M.setup()
       end
 
       local cur_win = vim.api.nvim_get_current_win()
+      local _wc = vim.api.nvim_win_get_config(cur_win)
+      if _wc.relative and _wc.relative ~= "" then
+        return
+      end
       local is_nav = (vim.w[cur_win].impetus_nav_window == 1)
       local is_child = (vim.w[cur_win].impetus_child_window == 1)
 
@@ -1374,6 +1540,13 @@ function M.setup()
           pane.main_win = cur_win
         end
       end
+
+      -- Nav/child windows must not drive info pane re-render or sync.
+      -- Info always follows the main window only.
+      if is_nav or is_child then
+        return
+      end
+
       local cur_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(ev.buf), ":p")
       clear_selected_line(pane)
       if pane.open_file ~= cur_path then

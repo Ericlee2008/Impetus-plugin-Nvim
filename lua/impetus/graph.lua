@@ -132,7 +132,7 @@ local function entype_target_type(entype)
     return "node"
   elseif e == "G" or e == "GS" then
     return "geometry"
-  elseif e == "ES" then
+  elseif e == "E" or e == "ES" then
     return "element"
   end
   return nil
@@ -587,6 +587,237 @@ local function parse_load(graph, file_path, lines, block)
   })
 end
 
+-- INITIAL_VELOCITY, INITIAL_DISPLACEMENT, INITIAL_TEMPERATURE,
+-- OUTPUT_ELEMENT, OUTPUT_NODE: entype+enid in first data row, no coid.
+local function parse_initial_entype(graph, file_path, lines, block, obj_type)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local sid = synthetic_id(file_path, block.start_row)
+  local key = make_object_key(obj_type, sid)
+  add_object(graph, {
+    key = key, type = obj_type, id = sid,
+    keyword = block.keyword, file = file_path, row = block.start_row, fields = {},
+  })
+  local fields = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local entype = trim(fields[1] or "")
+  local enid   = trim(fields[2] or "")
+  if entype ~= "" and enid ~= "" then
+    local ref_type = entype_target_type(entype)
+    if ref_type then
+      add_ref(graph, key, ref_type, enid, { field = "enid", entype = entype, strength = "semantic" })
+    end
+  end
+end
+
+-- LOAD_FORCE, LOAD_PRESSURE, CONNECTOR_SPOT_WELD*, EROSION_CRITERION:
+-- coid in row 1, entype+enid in row 2.
+local function parse_coid_entype2(graph, file_path, lines, block, obj_type)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local f1 = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local coid = trim(f1[1] or "")
+  if coid == "" or not integer_like(coid) then
+    coid = synthetic_id(file_path, block.start_row)
+  end
+  local key = make_object_key(obj_type, coid)
+  add_object(graph, {
+    key = key, type = obj_type, id = coid,
+    keyword = block.keyword, file = file_path, row = data_rows[1], fields = f1,
+  })
+  if data_rows[2] then
+    local f2 = split_csv_outside_quotes(lines[data_rows[2]] or "")
+    local entype = trim(f2[1] or "")
+    local enid   = trim(f2[2] or "")
+    if entype ~= "" and enid ~= "" then
+      local ref_type = entype_target_type(entype)
+      if ref_type then
+        add_ref(graph, key, ref_type, enid, { field = "enid", entype = entype, strength = "semantic" })
+      end
+    end
+  end
+end
+
+-- ADD_MASS, INITIAL_PLASTIC_STRAIN_FUNCTION, OUTPUT_SECTION,
+-- OUTPUT_CONTACT_FORCE, CONNECTOR_RIGID: coid[1]+entype[2]+enid[3] in row 1.
+local function parse_coid_inline_entype(graph, file_path, lines, block, obj_type)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local fields = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local coid = trim(fields[1] or "")
+  if coid == "" or not integer_like(coid) then
+    coid = synthetic_id(file_path, block.start_row)
+  end
+  local key = make_object_key(obj_type, coid)
+  add_object(graph, {
+    key = key, type = obj_type, id = coid,
+    keyword = block.keyword, file = file_path, row = data_rows[1], fields = fields,
+  })
+  local entype = trim(fields[2] or "")
+  local enid   = trim(fields[3] or "")
+  if entype ~= "" and enid ~= "" then
+    local ref_type = entype_target_type(entype)
+    if ref_type then
+      add_ref(graph, key, ref_type, enid, { field = "enid", entype = entype, strength = "semantic" })
+    end
+  end
+end
+
+-- RIGID_BODY_JOINT, CONNECTOR_GLUE_LINE, CONNECTOR_GLUE_SURFACE:
+-- coid in row 1, dual (entype_1+enid_1+entype_2+enid_2) in row 2.
+local function parse_coid_dual_entype2(graph, file_path, lines, block, obj_type)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local f1 = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local coid = trim(f1[1] or "")
+  if coid == "" or not integer_like(coid) then
+    coid = synthetic_id(file_path, block.start_row)
+  end
+  local key = make_object_key(obj_type, coid)
+  add_object(graph, {
+    key = key, type = obj_type, id = coid,
+    keyword = block.keyword, file = file_path, row = data_rows[1], fields = f1,
+  })
+  if data_rows[2] then
+    local f2 = split_csv_outside_quotes(lines[data_rows[2]] or "")
+    local en1, id1 = trim(f2[1] or ""), trim(f2[2] or "")
+    local en2, id2 = trim(f2[3] or ""), trim(f2[4] or "")
+    local t1, t2 = entype_target_type(en1), entype_target_type(en2)
+    if t1 and id1 ~= "" then
+      add_ref(graph, key, t1, id1, { field = "enid_1", entype = en1, strength = "semantic" })
+    end
+    if t2 and id2 ~= "" then
+      add_ref(graph, key, t2, id2, { field = "enid_2", entype = en2, strength = "semantic" })
+    end
+  end
+end
+
+-- FUNCTION, CURVE, COORDINATE_SYSTEM*, GEOMETRY_*, PROP_DAMAGE_*, PROP_SPOT_WELD:
+-- pure object definition, id is first integer in first data row.
+local function parse_id_object(graph, file_path, lines, block, obj_type)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local fields = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local oid = trim(fields[1] or "")
+  if oid == "" or not integer_like(oid) then return end
+  add_object(graph, {
+    key = make_object_key(obj_type, oid),
+    type = obj_type,
+    id = oid,
+    keyword = block.keyword,
+    file = file_path,
+    row = data_rows[1],
+    fields = fields,
+  })
+end
+
+-- RIGID_BODY_INERTIA: pid[1] in row 1, adds ref to part.
+local function parse_rigid_body_inertia(graph, file_path, lines, block)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local fields = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local pid = trim(fields[1] or "")
+  if pid == "" or not integer_like(pid) then return end
+  local key = make_object_key("rigid_body", pid)
+  add_object(graph, {
+    key = key, type = "rigid_body", id = pid,
+    keyword = block.keyword, file = file_path, row = data_rows[1], fields = fields,
+  })
+  add_ref(graph, key, "part", pid, { field = "pid", strength = "semantic" })
+end
+
+-- RIGID_BODY_DAMPING: pid_1[1]+pid_2[2] in row 1, both ref part.
+local function parse_rigid_body_damping(graph, file_path, lines, block)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local sid = synthetic_id(file_path, block.start_row)
+  local key = make_object_key("rigid_body_damping", sid)
+  add_object(graph, {
+    key = key, type = "rigid_body_damping", id = sid,
+    keyword = block.keyword, file = file_path, row = block.start_row, fields = {},
+  })
+  local fields = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  for _, f in ipairs({ fields[1], fields[2] }) do
+    local pid = trim(f or "")
+    if pid ~= "" and integer_like(pid) then
+      add_ref(graph, key, "part", pid, { field = "pid", strength = "semantic" })
+    end
+  end
+end
+
+-- CONNECTOR_SPR: coid[1]+pid_s[2]+pid_m[3] in row 1.
+local function parse_connector_spr(graph, file_path, lines, block)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local fields = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local coid = trim(fields[1] or "")
+  if coid == "" or not integer_like(coid) then
+    coid = synthetic_id(file_path, block.start_row)
+  end
+  local key = make_object_key("connector", coid)
+  add_object(graph, {
+    key = key, type = "connector", id = coid,
+    keyword = block.keyword, file = file_path, row = data_rows[1], fields = fields,
+  })
+  local pid_s = trim(fields[2] or "")
+  local pid_m = trim(fields[3] or "")
+  if pid_s ~= "" and integer_like(pid_s) then
+    add_ref(graph, key, "part", pid_s, { field = "pid_s", strength = "semantic" })
+  end
+  if pid_m ~= "" and integer_like(pid_m) then
+    add_ref(graph, key, "part", pid_m, { field = "pid_m", strength = "semantic" })
+  end
+end
+
+-- CONNECTOR_DAMPER: coid in row 1, pid_1[1]+pid_2[2] in row 2.
+local function parse_connector_damper(graph, file_path, lines, block)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local f1 = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local coid = trim(f1[1] or "")
+  if coid == "" or not integer_like(coid) then
+    coid = synthetic_id(file_path, block.start_row)
+  end
+  local key = make_object_key("connector", coid)
+  add_object(graph, {
+    key = key, type = "connector", id = coid,
+    keyword = block.keyword, file = file_path, row = data_rows[1], fields = f1,
+  })
+  if data_rows[2] then
+    local f2 = split_csv_outside_quotes(lines[data_rows[2]] or "")
+    for _, f in ipairs({ f2[1], f2[2] }) do
+      local pid = trim(f or "")
+      if pid ~= "" and integer_like(pid) then
+        add_ref(graph, key, "part", pid, { field = "pid", strength = "semantic" })
+      end
+    end
+  end
+end
+
+-- SET_GEOMETRY: setid in row 1, geometry members in rows 2+.
+local function parse_set_geometry(graph, file_path, lines, block)
+  local data_rows = collect_data_rows(lines, block)
+  if #data_rows == 0 then return end
+  local sf = split_csv_outside_quotes(lines[data_rows[1]] or "")
+  local setid = trim(sf[1] or "")
+  if setid == "" then return end
+  local key = make_object_key("set_geometry", setid)
+  add_object(graph, {
+    key = key, type = "set_geometry", id = setid,
+    keyword = block.keyword, file = file_path, row = data_rows[1], fields = sf,
+  })
+  for i = 2, #data_rows do
+    local fields = split_csv_outside_quotes(lines[data_rows[i]] or "")
+    for _, token in ipairs(fields) do
+      for _, member in ipairs(range_members(token)) do
+        local m = trim(member)
+        if m ~= "" then
+          add_ref(graph, key, "geometry", m, { field = "member", strength = "membership" })
+        end
+      end
+    end
+  end
+end
+
 local function find_block_at_row(lines, row)
   for _, block in ipairs(split_keyword_blocks(lines)) do
     if row >= (block.start_row or 1) and row <= (block.end_row or 0) then
@@ -679,12 +910,65 @@ local function infer_object_key_at_cursor(bufnr, row)
     return make_object_key("output_sensor", synthetic_id(path, block.start_row))
   elseif kw:match("^%*PARTICLE_") then
     return make_object_key("particle", synthetic_id(path, block.start_row))
+  elseif kw == "*LOAD_FORCE" or kw == "*LOAD_PRESSURE" then
+    local coid = trim(fields[1] or "")
+    if coid == "" or not integer_like(coid) then coid = synthetic_id(path, block.start_row) end
+    return make_object_key("load", coid)
   elseif kw:match("^%*LOAD_") then
     local lid = trim(fields[1] or "")
     if lid == "" or not integer_like(lid) then
       lid = synthetic_id(path, block.start_row)
     end
     return make_object_key("load", lid)
+  elseif kw == "*INITIAL_VELOCITY" or kw == "*INITIAL_DISPLACEMENT" or kw == "*INITIAL_TEMPERATURE"
+    or kw == "*INITIAL_PLASTIC_STRAIN_FUNCTION" then
+    return make_object_key("initial_condition", synthetic_id(path, block.start_row))
+  elseif kw == "*OUTPUT_ELEMENT" or kw == "*OUTPUT_NODE"
+    or kw == "*OUTPUT_SECTION" or kw == "*OUTPUT_CONTACT_FORCE" then
+    return make_object_key("output", synthetic_id(path, block.start_row))
+  elseif kw == "*RIGID_BODY_INERTIA" then
+    local pid = trim(fields[1] or "")
+    if pid ~= "" and integer_like(pid) then
+      return make_object_key("rigid_body", pid)
+    end
+  elseif kw == "*RIGID_BODY_DAMPING" then
+    return make_object_key("rigid_body_damping", synthetic_id(path, block.start_row))
+  elseif kw == "*RIGID_BODY_JOINT" then
+    local coid = trim(fields[1] or "")
+    if coid == "" or not integer_like(coid) then coid = synthetic_id(path, block.start_row) end
+    return make_object_key("rigid_body_joint", coid)
+  elseif kw == "*RIGID_BODY_ADD_NODES" then
+    local coid = trim(fields[1] or "")
+    if coid == "" or not integer_like(coid) then coid = synthetic_id(path, block.start_row) end
+    return make_object_key("rigid_body_add_nodes", coid)
+  elseif kw == "*CONNECTOR_RIGID" or kw == "*CONNECTOR_SPOT_WELD" or kw == "*CONNECTOR_SPOT_WELD_NODE"
+    or kw == "*CONNECTOR_GLUE_LINE" or kw == "*CONNECTOR_GLUE_SURFACE"
+    or kw == "*CONNECTOR_SPR" or kw == "*CONNECTOR_DAMPER" then
+    local coid = trim(fields[1] or "")
+    if coid == "" or not integer_like(coid) then coid = synthetic_id(path, block.start_row) end
+    return make_object_key("connector", coid)
+  elseif kw == "*ADD_MASS" or kw == "*EROSION_CRITERION" then
+    local coid = trim(fields[1] or "")
+    if coid == "" or not integer_like(coid) then coid = synthetic_id(path, block.start_row) end
+    return make_object_key(kw == "*EROSION_CRITERION" and "erosion_criterion" or "load", coid)
+  elseif kw == "*FUNCTION" then
+    local fid = trim(fields[1] or "")
+    if fid ~= "" and integer_like(fid) then return make_object_key("function", fid) end
+  elseif kw == "*CURVE" then
+    local cid = trim(fields[1] or "")
+    if cid ~= "" and integer_like(cid) then return make_object_key("curve", cid) end
+  elseif kw:match("^%*COORDINATE_SYSTEM") then
+    local csid = trim(fields[1] or "")
+    if csid ~= "" and integer_like(csid) then return make_object_key("coordinate_system", csid) end
+  elseif kw:match("^%*GEOMETRY_") then
+    local gid = trim(fields[1] or "")
+    if gid ~= "" and integer_like(gid) then return make_object_key("geometry", gid) end
+  elseif kw:match("^%*PROP_DAMAGE_") or kw == "*PROP_SPOT_WELD" or kw == "*PROP_THERMAL" then
+    local did = trim(fields[1] or "")
+    if did ~= "" and integer_like(did) then return make_object_key("property", did) end
+  elseif kw == "*SET_GEOMETRY" then
+    local setid = trim(fields[1] or "")
+    if setid ~= "" and integer_like(setid) then return make_object_key("set_geometry", setid) end
   end
 
   return nil, "Current row does not map to a supported object yet"
@@ -743,8 +1027,59 @@ local function build_subtree_from_lines(path, lines, stack, seen)
       parse_output_sensor(subtree, path, lines, block)
     elseif kw:match("^%*PARTICLE_") then
       parse_particle(subtree, path, lines, block)
+    -- Specific LOAD_ variants with entype refs before the generic catch-all
+    elseif kw == "*LOAD_FORCE" or kw == "*LOAD_PRESSURE" then
+      parse_coid_entype2(subtree, path, lines, block, "load")
     elseif kw:match("^%*LOAD_") then
       parse_load(subtree, path, lines, block)
+    -- INITIAL conditions
+    elseif kw == "*INITIAL_VELOCITY" or kw == "*INITIAL_DISPLACEMENT" or kw == "*INITIAL_TEMPERATURE" then
+      parse_initial_entype(subtree, path, lines, block, "initial_condition")
+    elseif kw == "*INITIAL_PLASTIC_STRAIN_FUNCTION" then
+      parse_coid_inline_entype(subtree, path, lines, block, "initial_condition")
+    -- OUTPUT
+    elseif kw == "*OUTPUT_ELEMENT" or kw == "*OUTPUT_NODE" then
+      parse_initial_entype(subtree, path, lines, block, "output")
+    elseif kw == "*OUTPUT_SECTION" or kw == "*OUTPUT_CONTACT_FORCE" then
+      parse_coid_inline_entype(subtree, path, lines, block, "output")
+    -- RIGID_BODY
+    elseif kw == "*RIGID_BODY_INERTIA" then
+      parse_rigid_body_inertia(subtree, path, lines, block)
+    elseif kw == "*RIGID_BODY_DAMPING" then
+      parse_rigid_body_damping(subtree, path, lines, block)
+    elseif kw == "*RIGID_BODY_JOINT" then
+      parse_coid_dual_entype2(subtree, path, lines, block, "rigid_body_joint")
+    elseif kw == "*RIGID_BODY_ADD_NODES" then
+      parse_coid_entype2(subtree, path, lines, block, "rigid_body_add_nodes")
+    -- CONNECTOR
+    elseif kw == "*CONNECTOR_RIGID" then
+      parse_coid_inline_entype(subtree, path, lines, block, "connector")
+    elseif kw == "*CONNECTOR_SPOT_WELD" or kw == "*CONNECTOR_SPOT_WELD_NODE" then
+      parse_coid_entype2(subtree, path, lines, block, "connector")
+    elseif kw == "*CONNECTOR_GLUE_LINE" or kw == "*CONNECTOR_GLUE_SURFACE" then
+      parse_coid_dual_entype2(subtree, path, lines, block, "connector")
+    elseif kw == "*CONNECTOR_SPR" then
+      parse_connector_spr(subtree, path, lines, block)
+    elseif kw == "*CONNECTOR_DAMPER" then
+      parse_connector_damper(subtree, path, lines, block)
+    -- ADD_MASS / EROSION
+    elseif kw == "*ADD_MASS" then
+      parse_coid_inline_entype(subtree, path, lines, block, "load")
+    elseif kw == "*EROSION_CRITERION" then
+      parse_coid_entype2(subtree, path, lines, block, "erosion_criterion")
+    -- Object definitions
+    elseif kw == "*FUNCTION" then
+      parse_id_object(subtree, path, lines, block, "function")
+    elseif kw == "*CURVE" then
+      parse_id_object(subtree, path, lines, block, "curve")
+    elseif kw:match("^%*COORDINATE_SYSTEM") then
+      parse_id_object(subtree, path, lines, block, "coordinate_system")
+    elseif kw:match("^%*GEOMETRY_") then
+      parse_id_object(subtree, path, lines, block, "geometry")
+    elseif kw:match("^%*PROP_DAMAGE_") or kw == "*PROP_SPOT_WELD" or kw == "*PROP_THERMAL" then
+      parse_id_object(subtree, path, lines, block, "property")
+    elseif kw == "*SET_GEOMETRY" then
+      parse_set_geometry(subtree, path, lines, block)
     end
   end
   return subtree

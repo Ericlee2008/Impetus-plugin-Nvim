@@ -82,7 +82,7 @@ local function dedupe_param_refs(refs)
   local out_defs, out_refs = {}, {}
   local seen_defs = {}
   for _, d in ipairs(refs.defs or {}) do
-    local key = string.format("%d:%d", d.row or 0, d.col or 0)
+    local key = string.format("%s:%d:%d", d.file or "", d.row or 0, d.col or 0)
     if not seen_defs[key] then
       seen_defs[key] = true
       out_defs[#out_defs + 1] = d
@@ -90,7 +90,7 @@ local function dedupe_param_refs(refs)
   end
   local seen_refs = {}
   for _, r in ipairs(refs.refs or {}) do
-    local key = string.format("%d:%d", r.row or 0, r.col or 0)
+    local key = string.format("%s:%d:%d", r.file or "", r.row or 0, r.col or 0)
     if not seen_defs[key] and not seen_refs[key] then
       seen_refs[key] = true
       out_refs[#out_refs + 1] = r
@@ -105,15 +105,36 @@ local function jump_to_item(it)
   end
   local row = it.row or 1
   local col = it.col or 0
+  if it.file and it.file ~= "" then
+    local cur_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p")
+    if it.file ~= cur_file then
+      -- Open in nav_win (left split), keep main window untouched
+      info.open_in_nav_win(it.file, row, col)
+      return
+    end
+  end
   vim.api.nvim_win_set_cursor(0, { row, col })
   vim.cmd("normal! zz")
 end
 
 local function show_param_refs_popup(items, param_name)
+  local this_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p")
+  local has_cross_file = false
+  for _, it in ipairs(items or {}) do
+    if it.file and it.file ~= "" and it.file ~= this_file then
+      has_cross_file = true
+      break
+    end
+  end
   local title = "Refs for %" .. normalize_param_name(param_name or "")
   local lines = {}
   for i, it in ipairs(items or {}) do
-    lines[#lines + 1] = string.format("%2d [%s] L%-5d %s", i, it.kind or "ref", it.row or 1, trim(it.line or ""))
+    local file_tag = ""
+    if has_cross_file then
+      local fname = (it.file and it.file ~= "") and vim.fn.fnamemodify(it.file, ":t") or "?"
+      file_tag = "[" .. fname .. "] "
+    end
+    lines[#lines + 1] = string.format("%2d [%s] %sL%-5d %s", i, it.kind or "ref", file_tag, it.row or 1, trim(it.line or ""))
   end
   if #lines == 0 then
     vim.notify("No refs for %" .. normalize_param_name(param_name), vim.log.levels.INFO)
@@ -136,6 +157,7 @@ local function show_param_refs_popup(items, param_name)
   vim.bo[buf].modifiable = false
   vim.bo[buf].readonly = true
   vim.bo[buf].filetype = "impetus"
+  vim.b[buf].impetus_popup_buffer = 1
 
   local win = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
@@ -207,6 +229,67 @@ local function show_param_refs_popup(items, param_name)
   vim.keymap.set("n", "<Space>", accept_current, { buffer = buf, silent = true })
   vim.keymap.set("n", "q", close_popup, { buffer = buf, silent = true })
   vim.keymap.set("n", "<Esc>", close_popup, { buffer = buf, silent = true })
+end
+
+local function capture_cursor_highlight_probe()
+  local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
+  local col1 = math.max(col0 + 1, 1)
+  local syn_id = vim.fn.synID(row, col1, 1)
+  local trans_id = vim.fn.synIDtrans(syn_id)
+  local syn_name = vim.fn.synIDattr(syn_id, "name")
+  local trans_name = vim.fn.synIDattr(trans_id, "name")
+  local line = vim.api.nvim_get_current_line()
+  vim.g.impetus_last_hl_probe = {
+    file = vim.api.nvim_buf_get_name(0),
+    row = row,
+    col = col0,
+    filetype = vim.bo.filetype,
+    syn_id = syn_id,
+    syn_name = syn_name,
+    trans_id = trans_id,
+    trans_name = trans_name,
+    pumvisible = vim.fn.pumvisible(),
+    line = line,
+  }
+  local msg = string.format(
+    "[impetus hl probe] ft=%s row=%d col=%d syn=%s trans=%s pum=%d",
+    tostring(vim.bo.filetype),
+    row,
+    col0,
+    tostring(syn_name),
+    tostring(trans_name),
+    tonumber(vim.fn.pumvisible()) or 0
+  )
+  vim.api.nvim_echo({ { msg, "WarningMsg" } }, false, {})
+end
+
+local function arm_highlight_probe()
+  local group = vim.api.nvim_create_augroup("ImpetusHighlightProbeOnce", { clear = true })
+  local fired = false
+  vim.g.impetus_last_hl_probe = {
+    status = "armed",
+    file = vim.api.nvim_buf_get_name(0),
+    filetype = vim.bo.filetype,
+  }
+  vim.api.nvim_create_autocmd({ "TextChangedI", "CompleteChanged", "CompleteDone", "CompleteDonePre", "CursorMovedI" }, {
+    group = group,
+    pattern = "*",
+    callback = function(ev)
+      if fired then
+        return
+      end
+      fired = true
+      vim.schedule(function()
+        vim.g.impetus_last_hl_probe_event = ev.event
+        pcall(capture_cursor_highlight_probe)
+        pcall(vim.api.nvim_del_augroup_by_id, group)
+      end)
+    end,
+    desc = "Capture cursor highlight during next completion state change",
+  })
+  vim.api.nvim_echo({
+    { "[impetus hl probe] armed, trigger completion once", "WarningMsg" },
+  }, false, {})
 end
 
 local function add_alias(name, target_cmd)
@@ -514,11 +597,23 @@ local function clean_current_buffer()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local blocks = split_keyword_blocks(lines)
   if #blocks == 0 then
-    return 0
+    return 0, {}
   end
 
   local out = {}
   local removed = 0
+  local entries = {}
+
+  -- Preamble: blank/comment lines before the first keyword block
+  for r = 1, blocks[1].start_row - 1 do
+    local line = lines[r] or ""
+    if is_comment_line(line) or is_blank_line(line) then
+      removed = removed + 1
+      entries[#entries + 1] = { row = r, line = line, reason = is_comment_line(line) and "comment" or "blank" }
+    else
+      out[#out + 1] = line
+    end
+  end
 
   for _, b in ipairs(blocks) do
     local entry = store.get_keyword(b.keyword)
@@ -529,21 +624,22 @@ local function clean_current_buffer()
     for r = b.start_row + 1, b.end_row do
       local line = lines[r] or ""
       local drop = false
+      local reason = nil
 
       if is_comment_line(line) or is_blank_line(line) then
         drop = true
+        reason = is_comment_line(line) and "comment" or "blank"
       elseif is_comma_only_line(line) then
         local expected = nil
         if sig_rows and sig_rows[data_row_idx + 1] then
           expected = #sig_rows[data_row_idx + 1]
         end
-        -- Keep comma-only placeholder rows only when they likely represent a required
-        -- signature row (usually multi-parameter data row).
         if expected and expected > 1 then
           drop = false
           data_row_idx = data_row_idx + 1
         else
           drop = true
+          reason = "comma-only"
         end
       else
         if not is_meta_row(line) then
@@ -553,6 +649,7 @@ local function clean_current_buffer()
 
       if drop then
         removed = removed + 1
+        entries[#entries + 1] = { row = r, line = line, reason = reason or "?" }
       else
         out[#out + 1] = line
       end
@@ -560,7 +657,7 @@ local function clean_current_buffer()
   end
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, out)
-  return removed
+  return removed, entries
 end
 
 local function split_keyword_blocks_with_unknown(lines)
@@ -596,30 +693,49 @@ local function advanced_clear_current_buffer()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local blocks = split_keyword_blocks_with_unknown(lines)
   if #blocks == 0 then
-    return 0
+    return 0, {}
   end
 
   local out = {}
   local removed = 0
+  local entries = {}
+
+  -- Preamble: blank/comment lines before the first keyword block
+  for r = 1, blocks[1].start_row - 1 do
+    local line = lines[r] or ""
+    if is_comment_line(line) or is_blank_line(line) then
+      removed = removed + 1
+      entries[#entries + 1] = { row = r, line = line, reason = is_comment_line(line) and "comment" or "blank" }
+    else
+      out[#out + 1] = line
+    end
+  end
 
   for _, b in ipairs(blocks) do
     if store.get_keyword(b.keyword) then
       local block_lines = {}
+      local block_rows = {}
       for r = b.start_row, b.end_row do
         local line = lines[r] or ""
         if not is_comment_line(line) then
           block_lines[#block_lines + 1] = line
+          block_rows[#block_rows + 1] = r
         else
           removed = removed + 1
+          entries[#entries + 1] = { row = r, line = line, reason = "comment", keyword = b.keyword }
         end
       end
 
       while #block_lines > 0 and is_blank_line(block_lines[1] or "") do
+        entries[#entries + 1] = { row = block_rows[1], line = block_lines[1], reason = "leading-blank", keyword = b.keyword }
         table.remove(block_lines, 1)
+        table.remove(block_rows, 1)
         removed = removed + 1
       end
       while #block_lines > 0 and is_blank_line(block_lines[#block_lines] or "") do
+        entries[#entries + 1] = { row = block_rows[#block_rows], line = block_lines[#block_lines], reason = "trailing-blank", keyword = b.keyword }
         table.remove(block_lines, #block_lines)
+        table.remove(block_rows, #block_rows)
         removed = removed + 1
       end
 
@@ -627,12 +743,19 @@ local function advanced_clear_current_buffer()
         out[#out + 1] = line
       end
     else
+      entries[#entries + 1] = {
+        row = b.start_row,
+        line = lines[b.start_row] or "",
+        reason = "unknown-block",
+        keyword = b.keyword,
+        count = b.end_row - b.start_row + 1,
+      }
       removed = removed + (b.end_row - b.start_row + 1)
     end
   end
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, out)
-  return removed
+  return removed, entries
 end
 
 local function format_parameter_definition_lines(block_lines)
@@ -648,13 +771,11 @@ local function format_parameter_definition_lines(block_lines)
     if lhs and rhs and rhs ~= "" then
       rhs = trim(rhs)
       comment = comment and trim(comment) or nil
-      local quote_str = comment and comment:match('"[^"]*"') or nil
       specs[i] = {
         indent = indent or "",
         lhs = lhs,
         rhs = rhs,
         comment = comment,
-        quote_str = quote_str,
       }
       max_lhs = math.max(max_lhs, #lhs)
       max_rhs = math.max(max_rhs, #rhs)
@@ -675,11 +796,7 @@ local function format_parameter_definition_lines(block_lines)
       local text = spec.indent .. spec.lhs .. lhs_pad .. "= " .. spec.rhs
       if spec.comment then
         local rhs_pad = string.rep(" ", math.max(1, max_rhs - #spec.rhs + 1))
-        if spec.quote_str then
-          text = text .. rhs_pad .. ", " .. spec.quote_str
-        else
-          text = text .. rhs_pad .. spec.comment
-        end
+        text = text .. rhs_pad .. spec.comment
       end
       out[#out + 1] = text
     end
@@ -719,6 +836,32 @@ local function align_parameter_blocks_in_buffer()
   return changed
 end
 
+local function current_operation_log_path()
+  local buf_name = vim.fn.expand("%:p")
+  local log_dir = buf_name ~= "" and vim.fn.fnamemodify(buf_name, ":h") or vim.fn.getcwd()
+  return log_dir .. "/impetus_nvim.log", buf_name
+end
+
+local function append_operation_log(operation, details)
+  local log_path, buf_name = current_operation_log_path()
+  local lines = {
+    "=== " .. tostring(operation) .. " " .. os.date("%Y-%m-%d %H:%M:%S") .. " ===",
+    "File: " .. (buf_name ~= "" and buf_name or "(unsaved)"),
+  }
+  for _, item in ipairs(details or {}) do
+    lines[#lines + 1] = item
+  end
+  lines[#lines + 1] = ""
+  local f = io.open(log_path, "a")
+  if f then
+    for _, l in ipairs(lines) do
+      f:write(l .. "\n")
+    end
+    f:close()
+  end
+  return log_path
+end
+
 local function parse_assignments_from_line(line)
   local t = strip_number_prefix(line or "")
   t = trim((t:gsub("%s[#$].*$", "")))
@@ -751,6 +894,14 @@ local function parse_assignments_from_line(line)
     end
   end
   return out
+end
+
+local function normalize_minus_variants(s)
+  local t = s or ""
+  t = t:gsub(vim.fn.nr2char(0x2212), "-")
+  t = t:gsub(vim.fn.nr2char(0x2013), "-")
+  t = t:gsub(vim.fn.nr2char(0x2014), "-")
+  return t
 end
 
 local function parse_include_path_from_lines(lines, include_row, end_row)
@@ -880,13 +1031,64 @@ local function is_plain_numeric_literal(expr)
     or src:match("^[-+]?%d*%.%d+([eE][-+]?%d+)?$") ~= nil
 end
 
+local function simplify_numeric_text(text)
+  local s = text or ""
+
+  s = s:gsub("%[([^%[%]]-)%]", function(expr)
+    local num = try_eval_numeric(expr)
+    if num then
+      return num
+    end
+    return "[" .. expr .. "]"
+  end)
+
+  s = s:gsub("([^,]+)", function(field)
+    local ft = trim(field)
+    if ft ~= "" and not is_plain_numeric_literal(ft) then
+      local num = try_eval_numeric(ft)
+      if num then
+        local lead = field:match("^(%s*)")
+        local trail = field:match("(%s*)$")
+        return lead .. num .. trail
+      end
+    end
+    return field
+  end)
+
+  local whole = trim(s)
+  if whole ~= "" and whole:find(",", 1, true) == nil then
+    local num = try_eval_numeric(whole)
+    if num then
+      local lead = s:match("^(%s*)")
+      local trail = s:match("(%s*)$")
+      return lead .. num .. trail
+    end
+  end
+
+  return s
+end
+
+local function simplify_numeric_text_fixed_point(text, max_passes)
+  local s = text or ""
+  local passes = max_passes or 4
+  for _ = 1, passes do
+    local next_s = simplify_numeric_text(s)
+    if next_s == s then
+      break
+    end
+    s = next_s
+  end
+  return s
+end
+
 local function replace_params_in_buffer(apply_arith)
   local buf = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local vars, blocks = build_param_tables(lines, vim.api.nvim_buf_get_name(buf))
   if vim.tbl_count(vars) == 0 then
-    return 0
+    return 0, {}
   end
+  local entries = {}
 
   local row_in_param = {}
   for _, b in ipairs(blocks) do
@@ -898,9 +1100,10 @@ local function replace_params_in_buffer(apply_arith)
     end
   end
 
-  local memo_expr, memo_num, visiting = {}, {}, {}
-  local function resolve_expr(name)
+  local memo_expr_plain, memo_expr_numeric, memo_num, visiting = {}, {}, {}, {}
+  local function resolve_expr(name, numeric)
     name = (name or ""):lower()
+    local memo_expr = numeric and memo_expr_numeric or memo_expr_plain
     if memo_expr[name] then
       return memo_expr[name]
     end
@@ -921,17 +1124,17 @@ local function replace_params_in_buffer(apply_arith)
     v = v:gsub("%%([%a_][%w_]*)", function(n)
       return resolve_expr(n) or ("%" .. n)
     end)
-    -- Always reduce resolvable numeric expressions (even without -a), so
-    -- definitions like S = 1.5 + %nu become scalar values before replacement.
-    local num = try_eval_numeric(v)
-    if num then
-      local resolved_trim = trim(v)
-      if is_plain_numeric_literal(raw_trim) then
-        v = raw_trim
-      elseif is_plain_numeric_literal(resolved_trim) then
-        v = resolved_trim
-      else
-        v = num
+    if numeric then
+      local num = try_eval_numeric(v)
+      if num then
+        local resolved_trim = trim(v)
+        if is_plain_numeric_literal(raw_trim) then
+          v = raw_trim
+        elseif is_plain_numeric_literal(resolved_trim) then
+          v = resolved_trim
+        else
+          v = num
+        end
       end
     end
     memo_expr[name] = v
@@ -944,7 +1147,7 @@ local function replace_params_in_buffer(apply_arith)
     if memo_num[name] then
       return memo_num[name]
     end
-    local expr = resolve_expr(name)
+    local expr = resolve_expr(name, true)
     if not expr then
       return nil
     end
@@ -954,7 +1157,7 @@ local function replace_params_in_buffer(apply_arith)
   end
 
   local function replace_token(name, numeric)
-    local rep = numeric and resolve_num(name) or resolve_expr(name)
+    local rep = numeric and resolve_num(name) or resolve_expr(name, false)
     return rep
   end
 
@@ -986,9 +1189,89 @@ local function replace_params_in_buffer(apply_arith)
           local rep = replace_token(n, apply_arith)
           return rep or ("%" .. n)
         end)
+        do
+          local lead = new_line:match("^(%s*)") or ""
+          local trail = new_line:match("(%s*)$") or ""
+          local whole = trim(new_line)
+          if apply_arith and whole ~= "" and whole:find(",", 1, true) == nil then
+            local num = try_eval_numeric(whole)
+            if num then
+              new_line = lead .. num .. trail
+            else
+              new_line = simplify_numeric_text_fixed_point(new_line, 6)
+            end
+          elseif apply_arith then
+            new_line = simplify_numeric_text_fixed_point(new_line, 6)
+          end
+        end
         if new_line ~= line then
+          entries[#entries + 1] = {
+            row = i,
+            before = line,
+            after = new_line,
+          }
           lines[i] = new_line
           changed = changed + 1
+        end
+      end
+    end
+  end
+
+  if apply_arith then
+    for i, line in ipairs(lines) do
+      if not row_in_param[i] then
+        local t = trim(strip_number_prefix(line))
+        if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" then
+          local lead = line:match("^(%s*)") or ""
+          local trail = line:match("(%s*)$") or ""
+          local whole = trim(line)
+          local new_line = line
+          if whole ~= "" and whole:find(",", 1, true) == nil then
+            local num = try_eval_numeric(whole)
+            if num then
+              new_line = lead .. num .. trail
+            else
+              new_line = simplify_numeric_text_fixed_point(line, 6)
+            end
+          else
+            new_line = simplify_numeric_text_fixed_point(line, 6)
+          end
+          if new_line ~= line then
+            entries[#entries + 1] = {
+              row = i,
+              before = line,
+              after = new_line,
+            }
+            lines[i] = new_line
+            changed = changed + 1
+          end
+        end
+      end
+    end
+
+    for i, line in ipairs(lines) do
+      if not row_in_param[i] then
+        local t = trim(strip_number_prefix(line))
+        if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" then
+          local replaced = substitute_params(line, true)
+          local lead = replaced:match("^(%s*)") or ""
+          local trail = replaced:match("(%s*)$") or ""
+          local whole = trim(replaced)
+          if whole ~= "" and whole:find(",", 1, true) == nil then
+            local num = try_eval_numeric(whole)
+            if num then
+              local new_line = lead .. num .. trail
+              if new_line ~= lines[i] then
+                entries[#entries + 1] = {
+                  row = i,
+                  before = lines[i],
+                  after = new_line,
+                }
+                lines[i] = new_line
+                changed = changed + 1
+              end
+            end
+          end
         end
       end
     end
@@ -997,7 +1280,7 @@ local function replace_params_in_buffer(apply_arith)
   if changed > 0 then
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   end
-  return changed
+  return changed, entries
 end
 
 local function show_cheatsheet_popup()
@@ -1070,18 +1353,16 @@ local function show_cheatsheet_popup()
   push_item(20, ":ImpetusParamDef", "Jump to parameter definition")
   push_text("", "blank")
   push_text("[Short Aliases]", "section")
-  push_item(20, ":help", "Open this quick help popup")
-  push_item(20, ":hp", "Open this quick help popup")
+  push_item(20, ":help / :hp", "Open this quick help popup")
   push_item(20, ":Ch", "Toggle right help pane")
-  push_item(20, ":info", "Open info pane")
-  push_item(20, ":inf", "Open info pane")
-  push_item(20, ":cl", "Clean comments/empty/noise rows")
+  push_item(20, ":info / :inf", "Open info pane")
+  push_item(20, ":clean / :cl", "Run clean command")
   push_item(20, ":rl", "Reload commands.help database")
-  push_item(20, ":chk", "Run lint")
+  push_item(20, ":chk / :Cc", "Run lint on current buffer")
   push_item(20, ":obj", "Open object registry")
   push_item(20, ":refs", "List refs of parameter under cursor")
   push_item(20, ":def", "Jump to parameter definition")
-  push_item(20, ":Cc", "Run lint")
+  push_item(20, ":gui", "Open GUI helper")
   push_text("", "blank")
   push_text("Press q / <Esc> / <CR> to close", "text")
 
@@ -1256,24 +1537,57 @@ function M.register()
       return
     end
     if args == "-c" then
-      local removed = clean_current_buffer()
-      vim.notify("Impetus clean -c done. Pair markers cleared, removed lines: " .. tostring(removed), vim.log.levels.INFO)
+      local removed, entries = clean_current_buffer()
+      local log_lines = {
+        string.format("[summary] removed=%d", removed),
+      }
+      if #entries > 0 then
+        log_lines[#log_lines + 1] = "[warm clean]"
+        for _, e in ipairs(entries) do
+          log_lines[#log_lines + 1] = string.format("  L%-5d %-12s %s", e.row, e.reason, trim(e.line))
+        end
+      end
+      local log_path = append_operation_log("clean -c", log_lines)
+      vim.notify("Impetus clean -c done. Pair markers cleared, removed lines: " .. tostring(removed) .. " | log: " .. vim.fn.fnamemodify(log_path, ":~:."), vim.log.levels.INFO)
       return
     end
     if args == "-a" then
-      local warm_removed = clean_current_buffer()
-      local advanced_removed = advanced_clear_current_buffer()
+      local warm_removed, warm_entries = clean_current_buffer()
+      local advanced_removed, adv_entries = advanced_clear_current_buffer()
       local aligned = align_parameter_blocks_in_buffer()
+
+      local log_lines = {
+        string.format(
+          "[summary] removed=%d (warm=%d adv=%d)  PARAMETER aligned=%d",
+          warm_removed + advanced_removed, warm_removed, advanced_removed, aligned
+        ),
+      }
+      if #warm_entries > 0 then
+        log_lines[#log_lines + 1] = "[warm clean]"
+        for _, e in ipairs(warm_entries) do
+          log_lines[#log_lines + 1] = string.format("  L%-5d %-12s %s", e.row, e.reason, trim(e.line))
+        end
+        log_lines[#log_lines + 1] = ""
+      end
+      if #adv_entries > 0 then
+        log_lines[#log_lines + 1] = "[advanced clean]"
+        for _, e in ipairs(adv_entries) do
+          if e.reason == "unknown-block" then
+            log_lines[#log_lines + 1] = string.format("  L%-5d unknown-block    %s (%d lines)", e.row, e.keyword, e.count or 1)
+          else
+            log_lines[#log_lines + 1] = string.format("  L%-5d %-16s %s  (%s)", e.row, e.reason, trim(e.line), e.keyword or "")
+          end
+        end
+        log_lines[#log_lines + 1] = ""
+      end
+      local log_path = append_operation_log("clean -a", log_lines)
+
       vim.notify(
-        "Impetus clean -a done. Pair markers cleared, removed lines: "
-          .. tostring(warm_removed + advanced_removed)
-          .. " (warm="
-          .. tostring(warm_removed)
-          .. ", advanced="
-          .. tostring(advanced_removed)
-          .. ")"
-          .. ", aligned PARAMETER lines: "
-          .. tostring(aligned),
+        string.format(
+          "Impetus clean -a done. Removed: %d (warm=%d adv=%d), aligned: %d | log: %s",
+          warm_removed + advanced_removed, warm_removed, advanced_removed, aligned,
+          vim.fn.fnamemodify(log_path, ":~:.")
+        ),
         vim.log.levels.INFO
       )
       return
@@ -1286,9 +1600,17 @@ function M.register()
 
   vim.api.nvim_create_user_command("ImpetusReplaceParams", function(opts)
     local args = trim(opts.args or "")
-    local apply_arith = args:find("%-a", 1, true) ~= nil
-    local changed = replace_params_in_buffer(apply_arith)
-    vim.notify("Impetus replace done. Updated lines: " .. tostring(changed), vim.log.levels.INFO)
+    local apply_arith = args:find("%-a") ~= nil
+    local changed, entries = replace_params_in_buffer(apply_arith)
+    local log_lines = {
+      string.format("[summary] changed=%d apply_arith=%s", changed, tostring(apply_arith)),
+    }
+    for _, e in ipairs(entries or {}) do
+      log_lines[#log_lines + 1] = string.format("  L%-5d before: %s", e.row, trim(e.before))
+      log_lines[#log_lines + 1] = string.format("         after : %s", trim(e.after))
+    end
+    local log_path = append_operation_log(apply_arith and "re -a" or "re", log_lines)
+    vim.notify("Impetus replace done. Updated lines: " .. tostring(changed) .. " | log: " .. vim.fn.fnamemodify(log_path, ":~:."), vim.log.levels.INFO)
   end, { nargs = "*" })
 
   vim.api.nvim_create_user_command("ImpetusOutline", function()
@@ -1306,28 +1628,73 @@ function M.register()
     vim.cmd("copen")
   end, {})
 
+  local function show_object_refs(obj, cur_row)
+    local bufnr = vim.api.nvim_get_current_buf()
+    local def = analysis.object_definition(bufnr, obj.obj_type, obj.id)
+    local refs_list = analysis.object_references(bufnr, obj.obj_type, obj.id)
+    local obj_items = {}
+    local def_rows = {}
+    if def and def.row ~= cur_row then
+      obj_items[#obj_items + 1] = { kind = "def", row = def.row, col = def.col or 0, line = def.line or "", file = "" }
+      def_rows[def.row] = true
+    end
+    for _, r in ipairs(refs_list) do
+      if r.row ~= cur_row and not def_rows[r.row] then
+        obj_items[#obj_items + 1] = { kind = "ref", row = r.row, col = r.col or 0, line = r.line or "", file = "" }
+      end
+    end
+    if #obj_items == 0 then
+      vim.notify(string.format("No refs for %s ID %s", obj.obj_type, obj.id), vim.log.levels.INFO)
+    elseif #obj_items == 1 then
+      jump_to_item(obj_items[1])
+    else
+      show_param_refs_popup(obj_items, string.format("%s:%s", obj.obj_type, obj.id))
+    end
+  end
+
   vim.api.nvim_create_user_command("ImpetusParamRefs", function(opts)
     local name = opts.args
     if name == "" then
       name = param_under_cursor() or ""
     end
     if name == "" then
+      -- No %param under cursor: try object ID (reference field or definition keyword)
+      local bufnr = vim.api.nvim_get_current_buf()
+      local obj = analysis.object_under_cursor(bufnr) or analysis.object_def_under_cursor(bufnr)
+      if obj then
+        show_object_refs(obj, vim.api.nvim_win_get_cursor(0)[1])
+        return
+      end
       vim.notify("Usage: :ImpetusParamRefs <param_name>", vim.log.levels.WARN)
       return
     end
-    local refs = dedupe_param_refs(analysis.param_references(0, name))
+    local refs = dedupe_param_refs(analysis.param_references_all(vim.api.nvim_get_current_buf(), name))
     local cur = vim.api.nvim_win_get_cursor(0)
     local cur_row = cur[1]
+    local cur_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p")
     local items = {}
+    local def_keys = {}
     for _, d in ipairs(refs.defs or {}) do
-      if (d.row or 0) ~= cur_row then
-        items[#items + 1] = { kind = "def", row = d.row, col = d.col, line = d.line or "" }
+      if not ((d.row or 0) == cur_row and (d.file or "") == cur_file) then
+        items[#items + 1] = { kind = "def", row = d.row, col = d.col, line = d.line or "", file = d.file or "" }
+        def_keys[(d.file or "") .. ":" .. tostring(d.row or 0)] = true
       end
     end
     for _, r in ipairs(refs.refs or {}) do
-      items[#items + 1] = { kind = "ref", row = r.row, col = r.col, line = r.line or "" }
+      local key = (r.file or "") .. ":" .. tostring(r.row or 0)
+      if not ((r.row or 0) == cur_row and (r.file or "") == cur_file) and not def_keys[key] then
+        items[#items + 1] = { kind = "ref", row = r.row, col = r.col, line = r.line or "", file = r.file or "" }
+      end
     end
     table.sort(items, function(a, b)
+      local a_def = a.kind == "def"
+      local b_def = b.kind == "def"
+      if a_def ~= b_def then
+        return a_def
+      end
+      if (a.file or "") ~= (b.file or "") then
+        return (a.file or "") < (b.file or "")
+      end
       if (a.row or 0) ~= (b.row or 0) then
         return (a.row or 0) < (b.row or 0)
       end
@@ -1335,7 +1702,17 @@ function M.register()
     end)
 
     if #items == 0 then
+      local bufnr = vim.api.nvim_get_current_buf()
+      local obj = analysis.object_under_cursor(bufnr) or analysis.object_def_under_cursor(bufnr)
+      if obj then
+        show_object_refs(obj, vim.api.nvim_win_get_cursor(0)[1])
+        return
+      end
       vim.notify("No refs for %" .. normalize_param_name(name), vim.log.levels.INFO)
+      return
+    end
+    if #items == 1 then
+      jump_to_item(items[1])
       return
     end
     show_param_refs_popup(items, name)
@@ -1346,17 +1723,33 @@ function M.register()
     if name == "" then
       name = param_under_cursor() or ""
     end
-    if name == "" then
-      vim.notify("Usage: :ImpetusParamDef <param_name>", vim.log.levels.WARN)
-      return
-    end
-    local refs = dedupe_param_refs(analysis.param_references(0, name))
-    if not refs.defs or #refs.defs == 0 then
+    if name ~= "" then
+      local refs = dedupe_param_refs(analysis.param_references_all(vim.api.nvim_get_current_buf(), name))
+      if refs.defs and #refs.defs > 0 then
+        jump_to_item(refs.defs[1])
+        return
+      end
       vim.notify("No definition found for %" .. normalize_param_name(name), vim.log.levels.INFO)
       return
     end
-    local d = refs.defs[1]
-    vim.api.nvim_win_set_cursor(0, { d.row, d.col or 0 })
+    -- Check if cursor is ON a definition keyword (already at definition)
+    local def_obj = analysis.object_def_under_cursor(vim.api.nvim_get_current_buf())
+    if def_obj then
+      vim.notify(string.format("Already at %s definition (ID %s)", def_obj.obj_type, def_obj.id), vim.log.levels.INFO)
+      return
+    end
+    -- Fallback: object ID under cursor (reference field)
+    local obj = analysis.object_under_cursor(vim.api.nvim_get_current_buf())
+    if obj then
+      local def = analysis.object_definition(vim.api.nvim_get_current_buf(), obj.obj_type, obj.id)
+      if def then
+        jump_to_item(def)
+        return
+      end
+      vim.notify(string.format("No definition for %s ID %s", obj.obj_type, obj.id), vim.log.levels.INFO)
+      return
+    end
+    vim.notify("Usage: :ImpetusParamDef <param_name>", vim.log.levels.WARN)
   end, { nargs = "?" })
 
   vim.api.nvim_create_user_command("ImpetusObjects", function()
@@ -1408,6 +1801,10 @@ function M.register()
 
   vim.api.nvim_create_user_command("ImpetusOpenGUI", function()
     actions.open_in_gui()
+  end, {})
+
+  vim.api.nvim_create_user_command("ImpetusHighlightProbe", function()
+    arm_highlight_probe()
   end, {})
 
   vim.api.nvim_create_user_command("ImpetusCheckBlocks", function()
@@ -1493,10 +1890,25 @@ function M.register()
   add_alias("Cgraph", "ImpetusGraphInfo")
   add_alias("Cgr", "ImpetusGraphRefs")
   add_alias("Cgdel", "ImpetusGraphDeleteCheck")
+  add_alias("Chlprobe", "ImpetusHighlightProbe")
   add_alias("Cref", "ImpetusRefComplete")
   add_alias("Cf", "ImpetusRefComplete")
   add_alias("Copen", "ImpetusOpenGUI")
   add_alias("Co", "ImpetusOpenGUI")
+  add_alias("Cgui", "ImpetusOpenGUI")
+  add_alias("Re", "ImpetusReplaceParams")
+  add_alias("Clean", "ImpetusClean")
+  add_alias("Clear", "ImpetusClean")
+  add_alias("Info", "ImpetusInfo")
+  add_alias("Help", "ImpetusCheatSheet")
+  add_alias("Gui", "ImpetusOpenGUI")
+  add_alias("Hp", "ImpetusCheatSheet")
+  add_alias("Inf", "ImpetusInfo")
+  add_alias("Chk", "ImpetusLint")
+  add_alias("Obj", "ImpetusObjects")
+  add_alias("Refs", "ImpetusParamRefs")
+  add_alias("Def", "ImpetusParamDef")
+  add_alias("Rl", "ImpetusReload")
   add_alias("Cblock", "ImpetusCheckBlocks")
   add_alias("Cfoldbounds", "ImpetusFoldBounds")
   add_alias("Ctrykwfold", "ImpetusTryKeywordFold")
@@ -1508,12 +1920,80 @@ function M.register()
   end
 
   -- Command-line short forms
-  vim.cmd([[cnoreabbrev <expr> info (getcmdtype()==':' && getcmdline() ==# 'info') ? 'ImpetusInfo' : 'info']])
-  vim.cmd([[cnoreabbrev <expr> clean (getcmdtype()==':' && getcmdline() ==# 'clean') ? 'ImpetusClean' : 'clean']])
-  vim.cmd([[cnoreabbrev <expr> cl (getcmdtype()==':' && getcmdline() ==# 'cl') ? 'ImpetusClean' : 'cl']])
-  vim.cmd([[cnoreabbrev <expr> clear (getcmdtype()==':' && getcmdline() ==# 'clear') ? 'ImpetusClean' : 'clear']])
-  vim.cmd([[cnoreabbrev <expr> re (getcmdtype()==':' && getcmdline() ==# 're') ? 'ImpetusReplaceParams' : 're']])
-  vim.cmd([[cnoreabbrev <expr> help (getcmdtype()==':' && getcmdline() ==# 'help') ? 'ImpetusCheatSheet' : 'help']])
+  pcall(vim.keymap.del, "c", "<CR>")
+  vim.keymap.set("c", "<kMinus>", "-")
+  vim.keymap.set("c", "<S-kMinus>", "-")
+  vim.keymap.set("c", "<CR>", function()
+    if vim.fn.getcmdtype() == ":" then
+      local line = normalize_minus_variants(vim.fn.getcmdline() or "")
+      local cmd = vim.trim((line:match("^(%S+)") or ""))
+      if cmd == "re" then
+        local args = normalize_minus_variants(vim.trim(line:match("^%S+%s*(.*)$") or ""))
+        local apply_arith = args:find("%f[%S]%-a%f[%s]") ~= nil or args == "-a"
+        vim.schedule(function()
+          local changed, entries = replace_params_in_buffer(apply_arith)
+          local log_lines = {
+            string.format("[summary] changed=%d apply_arith=%s", changed, tostring(apply_arith)),
+          }
+          for _, e in ipairs(entries or {}) do
+            log_lines[#log_lines + 1] = string.format("  L%-5d before: %s", e.row, trim(e.before))
+            log_lines[#log_lines + 1] = string.format("         after : %s", trim(e.after))
+          end
+          local log_path = append_operation_log(apply_arith and "re -a" or "re", log_lines)
+          vim.notify("Impetus replace done. Updated lines: " .. tostring(changed) .. " | log: " .. vim.fn.fnamemodify(log_path, ":~:."), vim.log.levels.INFO)
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "clean" or cmd == "cl" or cmd == "clear" then
+        local args = normalize_minus_variants(vim.trim(line:match("^%S+%s*(.*)$") or ""))
+        vim.schedule(function()
+          run_clean_command({ args = args })
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "info" or cmd == "inf" then
+        vim.schedule(function()
+          info.toggle_for_current()
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "help" or cmd == "hp" then
+        vim.schedule(function()
+          show_cheatsheet_popup()
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "gui" then
+        vim.schedule(function()
+          actions.open_in_gui()
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "chk" then
+        vim.schedule(function()
+          local diagnostics = lint.run(0)
+          vim.notify("Impetus lint finished. Diagnostics: " .. tostring(#diagnostics), vim.log.levels.INFO)
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "obj" then
+        vim.schedule(function()
+          vim.cmd("ImpetusObjects")
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "refs" then
+        vim.schedule(function()
+          vim.cmd("ImpetusParamRefs")
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "def" then
+        vim.schedule(function()
+          vim.cmd("ImpetusParamDef")
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      elseif cmd == "rl" then
+        vim.schedule(function()
+          M.reload_help(false)
+        end)
+        return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      end
+    end
+    return vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+  end, { expr = true, noremap = true })
 end
 
 return M

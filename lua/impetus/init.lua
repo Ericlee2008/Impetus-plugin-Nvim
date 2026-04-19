@@ -595,6 +595,42 @@ local function setup_filetype_behaviors()
     intrinsic.apply_syntax_for_current_buffer()
   end
 
+  local function refresh_completion_palette(buf)
+    if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+      return
+    end
+    ensure_impetus_filetype(buf)
+    local ft = vim.bo[buf].filetype
+    if ft ~= "impetus" and ft ~= "kwt" then
+      return
+    end
+    refresh_main_visuals(buf)
+    vim.api.nvim_set_hl(0, "Keyword", { fg = "#ff00ff", bold = true, ctermfg = 201 })
+    vim.api.nvim_set_hl(0, "impetusKeyword", { fg = "#ff00ff", bold = true, ctermfg = 201 })
+    vim.api.nvim_set_hl(0, "CmpNormal", { bg = "#0d0d0d", fg = "#ff00ff" })
+    vim.api.nvim_set_hl(0, "CmpBorder", { fg = "#ff00ff" })
+    vim.api.nvim_set_hl(0, "CmpSel", { bg = "#2a1a3a", fg = "#ff7cff", bold = true })
+    vim.api.nvim_set_hl(0, "BlinkCmpMenu", { bg = "#0d0d0d", fg = "#ff00ff" })
+    vim.api.nvim_set_hl(0, "BlinkCmpMenuBorder", { fg = "#ff00ff" })
+    vim.api.nvim_set_hl(0, "BlinkCmpMenuSelection", { bg = "#2a1a3a", fg = "#ff7cff", bold = true })
+    vim.api.nvim_set_hl(0, "BlinkCmpLabel", { fg = "#ff00ff", bold = true })
+    vim.api.nvim_set_hl(0, "BlinkCmpLabelMatch", { fg = "#ff7cff", bold = true })
+  end
+
+  local function refresh_completion_palette_burst(buf)
+    if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+      return
+    end
+    local delays = { 0, 20, 80, 160 }
+    for _, delay in ipairs(delays) do
+      vim.defer_fn(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          pcall(refresh_completion_palette, buf)
+        end
+      end, delay)
+    end
+  end
+
   local function focus_first_keyword_in_window(win, buf)
     if not (win and vim.api.nvim_win_is_valid(win) and buf and vim.api.nvim_buf_is_valid(buf)) then
       return
@@ -942,6 +978,16 @@ local function setup_filetype_behaviors()
     callback = function(ev)
       vim.schedule(function()
         refresh_main_visuals(ev.buf)
+      end)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd({ "InsertEnter", "CompleteChanged", "CompleteDone", "CompleteDonePre" }, {
+    group = group,
+    pattern = "*",
+    callback = function(ev)
+      vim.schedule(function()
+        refresh_completion_palette_burst(ev.buf)
       end)
     end,
   })
