@@ -35,7 +35,7 @@ local function ensure_blink_sort_for_impetus()
     return
   end
   -- Force deterministic order for Impetus completion items.
-  -- 【改进】同时配置 sources 以启用 impetus_kw
+  -- [IMPROVEMENT] Also configure sources to enable impetus_kw
   pcall(blink.setup, {
     fuzzy = {
       sorts = { "sort_text", "label" },

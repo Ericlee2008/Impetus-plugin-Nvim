@@ -9,6 +9,8 @@ local side_help = require("impetus.side_help")
 local actions = require("impetus.actions")
 local info = require("impetus.info")
 local intrinsic = require("impetus.intrinsic")
+local intrinsic_hover = require("impetus.intrinsic_hover")
+local analysis = require("impetus.analysis")
 
 local M = {}
 local dev_state = {
@@ -35,7 +37,7 @@ local function ensure_blink_sort_for_impetus()
     return
   end
   -- Force deterministic order for Impetus completion items.
-  -- 【改进】同时配置 sources 以启用 impetus_kw
+  -- Also configure sources to enable impetus_kw
   pcall(blink.setup, {
     fuzzy = {
       sorts = { "sort_text", "label" },
@@ -764,9 +766,9 @@ local function setup_filetype_behaviors()
     safe_map("n", "<localleader>N", actions.goto_prev_keyword, { buffer = buf, silent = true, desc = "Prev keyword" })
     safe_map("n", "<localleader>f", actions.toggle_all_keyword_folds, { buffer = buf, silent = true, desc = "Toggle fold all keyword blocks" })
     safe_map("n", "<localleader>t", actions.toggle_keyword_fold_here, { buffer = buf, silent = true, desc = "Toggle current keyword fold" })
-    safe_map("n", "<localleader>F", actions.toggle_all_control_folds, { buffer = buf, silent = true, desc = "Toggle fold all control blocks" })
+    safe_map("n", "<localleader>F", actions.release_outer_control_fold, { buffer = buf, silent = true, desc = "Release outermost control fold (peel inward)" })
     safe_map("n", "<localleader>T", actions.toggle_control_fold_here, { buffer = buf, silent = true, desc = "Toggle current control block fold" })
-    safe_map("n", "<localleader>z", actions.toggle_all_folds, { buffer = buf, silent = true, desc = "Toggle fold all keyword + control blocks" })
+    safe_map("n", "<localleader>z", actions.toggle_all_folds, { buffer = buf, silent = true, desc = "Toggle all folds (keyword + control)" })
     safe_map("n", "<localleader>m", actions.jump_match_block, { buffer = buf, silent = true, desc = "Jump to matching control block" })
     safe_map("n", "<localleader>b", actions.check_blocks, { buffer = buf, silent = true, desc = "Check unmatched control blocks" })
     safe_map("n", "%", function()
@@ -776,6 +778,7 @@ local function setup_filetype_behaviors()
     end, { buffer = buf, silent = true, desc = "Match jump (directive/brackets)" })
     safe_map("n", "<localleader>u", "<Cmd>ImpetusCheatSheet<CR>", { buffer = buf, silent = true, desc = "Impetus quick help" })
     safe_map("n", "<localleader>h", actions.toggle_help, { buffer = buf, silent = true, desc = "Toggle help pane" })
+    safe_map("n", "gh", intrinsic_hover.show, { buffer = buf, silent = true, desc = "Show intrinsic hover docs" })
     safe_map("n", "<localleader><localleader>", actions.show_ref_completion, { buffer = buf, silent = true, desc = "Ref/Option completion" })
     safe_map("n", "<localleader>R", actions.show_ref_completion, { buffer = buf, silent = true, desc = "Ref/Option completion" })
     safe_map("i", "<localleader><localleader>", actions.show_ref_completion, { buffer = buf, silent = true, desc = "Ref/Option completion" })
@@ -819,6 +822,7 @@ local function setup_filetype_behaviors()
         if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
           vim.wo[win].foldlevel = 99
           vim.wo[win].foldenable = true
+          vim.wo[win].foldcolumn = "auto:1"
           vim.api.nvim_win_call(win, function()
             vim.cmd("silent! normal! zR")
           end)
@@ -903,6 +907,7 @@ local function setup_filetype_behaviors()
       group = group,
       pattern = { "*.key", "*.k", "*.imp", "*.inp" },
       callback = function(ev)
+        analysis.invalidate_cross_file_cache_for_path(vim.api.nvim_buf_get_name(ev.buf))
         lint.run(ev.buf)
       end,
     })
@@ -1027,6 +1032,7 @@ function M.setup(opts)
   if config.get().auto_load then
     try_bootstrap_db()
   end
+  analysis.warmup_cross_file_cache()
 end
 
 return M

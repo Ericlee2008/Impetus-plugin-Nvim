@@ -295,16 +295,12 @@ local function param_names_for_row(entry, row_index)
   return entry.signature_rows[row_index] or entry.signature_rows[#entry.signature_rows]
 end
 
-local function bc_motion_omits_bcid(data_rows, lines)
+local function first_data_row_is_nonnumeric(data_rows, lines)
   local first_row = data_rows and data_rows[1]
-  if not first_row then
-    return false
-  end
+  if not first_row then return false end
   local values = split_csv_outside_quotes(lines[first_row] or "")
   local first = trim(values[1] or "")
-  if first == "" or first:match('^".*"$') then
-    return false
-  end
+  if first == "" or first:match('^".*"$') then return false end
   return not (
     first:match("^[+-]?%d+$")
     or first:match("^[+-]?%d+%.0+$")
@@ -313,10 +309,19 @@ local function bc_motion_omits_bcid(data_rows, lines)
   )
 end
 
-local function schema_row_for_context(keyword, data_rows, lines, row_index)
-  local kw = (keyword or ""):upper()
-  if kw == "*BC_MOTION" and bc_motion_omits_bcid(data_rows, lines) then
-    return row_index + 1
+-- Generic: for keywords whose schema row 1 is a single optional ID (coid/bcid),
+-- detect whether that row was omitted (first data row starts with non-numeric content).
+local function schema_row_for_context(keyword, entry, data_rows, lines, row_index)
+  if not first_data_row_is_nonnumeric(data_rows, lines) then
+    return row_index
+  end
+  local sig = entry and entry.signature_rows
+  if sig and sig[1] and #sig[1] == 1 and #sig >= 2 then
+    local first_param = sig[1][1] or ""
+    local is_id_like = first_param:match("^%d+$") or first_param:match("^[%a_]*[iI][dD]$")
+    if is_id_like then
+      return row_index + 1
+    end
   end
   return row_index
 end
@@ -441,7 +446,7 @@ local function detect_context(buf, win)
   local data_rows = collect_data_rows(lines, block)
   local row_idx = current_data_row_index(data_rows, row)
   if row_idx then
-    local schema_row_idx = schema_row_for_context(block.keyword, data_rows, lines, row_idx)
+    local schema_row_idx = schema_row_for_context(block.keyword, entry, data_rows, lines, row_idx)
     local row_params = param_names_for_row(entry, schema_row_idx)
     if row_params then
       local line = lines[row] or ""

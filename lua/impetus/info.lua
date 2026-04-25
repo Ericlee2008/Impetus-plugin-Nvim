@@ -677,6 +677,8 @@ local function recover_existing_pane()
           open_file = main_buf and vim.api.nvim_buf_get_name(main_buf) or "",
           line_targets = {},
           keyword_active_lines = {},
+          foldable_lines = {},
+          first_fold_line = {},
           nav_win = nil,
           return_cursor = nil,
         }
@@ -736,6 +738,8 @@ local function ensure_pane(source_buf, source_win)
     open_file = vim.api.nvim_buf_get_name(source_buf),
     line_targets = {},
     keyword_active_lines = {},
+    foldable_lines = {},
+    first_fold_line = {},
     nav_win = nil,
     return_cursor = nil,
     selected_lnum = nil,
@@ -816,7 +820,39 @@ local function ensure_pane(source_buf, source_win)
 
   vim.keymap.set("n", "<CR>", jump_from_info, { buffer = buf, silent = true, desc = "Jump to keyword/file" })
   vim.keymap.set("n", "<2-LeftMouse>", jump_from_info, { buffer = buf, silent = true, desc = "Jump to keyword/file" })
-  vim.keymap.set("n", "<LeftRelease>", jump_from_info, { buffer = buf, silent = true, desc = "Jump to keyword/file" })
+  vim.keymap.set("n", "<LeftRelease>", function()
+    local p = state.pane
+    if not p then
+      jump_from_info()
+      return
+    end
+    local row = vim.fn.line(".")
+    local lnum0 = row - 1
+    -- On a fold title line: do nothing so that Neovim's default foldcolumn
+    -- click (or the ,f keymap) handles the fold.  Otherwise jump.
+    if p.first_fold_line and p.first_fold_line[lnum0] then
+      return
+    end
+    jump_from_info()
+  end, { buffer = buf, silent = true, desc = "Jump to keyword/file" })
+  vim.keymap.set("n", ",f", function()
+    local p = state.pane
+    if not p or not p.first_fold_line then
+      return
+    end
+    local any_closed = false
+    for lnum0, _ in pairs(p.first_fold_line) do
+      if vim.fn.foldclosed(lnum0 + 1) ~= -1 then
+        any_closed = true
+        break
+      end
+    end
+    if any_closed then
+      vim.cmd("normal! zR")
+    else
+      vim.cmd("normal! zM")
+    end
+  end, { buffer = buf, silent = true, desc = "Toggle all keyword folds in info pane" })
 
   if vim.api.nvim_win_is_valid(prev_win) then
     vim.api.nvim_set_current_win(prev_win)
@@ -896,10 +932,10 @@ local function render(source_buf, source_win)
       material_ids = {},
       node_ids = {},
       element_ids = {},
-      min_node_id = nil,
-      max_node_id = nil,
-      min_element_id = nil,
-      max_element_id = nil,
+      min_part_id = nil, max_part_id = nil,
+      min_material_id = nil, max_material_id = nil,
+      min_node_id = nil, max_node_id = nil,
+      min_element_id = nil, max_element_id = nil,
     }
     if node and node.parsed then
       acc.total = acc.total + (node.parsed.total_keywords or 0)
@@ -911,28 +947,28 @@ local function render(source_buf, source_win)
         end
       end
       for _, it in ipairs(node.parsed.part_ids or {}) do
-        if it.value then
-          acc.part_ids[it.value] = true
+        if it.value then acc.part_ids[it.value] = true end
+        if it.num then
+          acc.min_part_id = acc.min_part_id and math.min(acc.min_part_id, it.num) or it.num
+          acc.max_part_id = acc.max_part_id and math.max(acc.max_part_id, it.num) or it.num
         end
       end
       for _, it in ipairs(node.parsed.material_ids or {}) do
-        if it.value then
-          acc.material_ids[it.value] = true
+        if it.value then acc.material_ids[it.value] = true end
+        if it.num then
+          acc.min_material_id = acc.min_material_id and math.min(acc.min_material_id, it.num) or it.num
+          acc.max_material_id = acc.max_material_id and math.max(acc.max_material_id, it.num) or it.num
         end
       end
       for _, it in ipairs(node.parsed.node_ids or {}) do
-        if it.value then
-          acc.node_ids[it.value] = true
-        end
+        if it.value then acc.node_ids[it.value] = true end
         if it.num then
           acc.min_node_id = acc.min_node_id and math.min(acc.min_node_id, it.num) or it.num
           acc.max_node_id = acc.max_node_id and math.max(acc.max_node_id, it.num) or it.num
         end
       end
       for _, it in ipairs(node.parsed.element_ids or {}) do
-        if it.value then
-          acc.element_ids[it.value] = true
-        end
+        if it.value then acc.element_ids[it.value] = true end
         if it.num then
           acc.min_element_id = acc.min_element_id and math.min(acc.min_element_id, it.num) or it.num
           acc.max_element_id = acc.max_element_id and math.max(acc.max_element_id, it.num) or it.num
@@ -968,6 +1004,9 @@ local function render(source_buf, source_win)
   for _ in pairs(model_stats.element_ids) do
     model_element_total = model_element_total + 1
   end
+
+  pane.foldable_lines = {}
+  pane.first_fold_line = {}
 
   local lines = {}
   local marks = {}
@@ -1022,38 +1061,105 @@ local function render(source_buf, source_win)
     end
   end
 
+  -- Helper: add a model-stat table row with label / total / min-id / max-id highlighting
+  local function add_model_stat_row(label, total, min_id, max_id)
+    local dash = "-"
+    local total_s = tostring(total or 0)
+    local min_s   = min_id  and tostring(min_id)  or dash
+    local max_s   = max_id  and tostring(max_id)  or dash
+    local text = string.format("  %-12s %7s   %8s   %8s", label, total_s, min_s, max_s)
+    local lnum = add_line(text)
+    local lpos = text:find(label, 1, true)
+    local tpos = text:find(total_s, 1, true)
+    local mnpos = text:find(min_s, (tpos or 1) + #total_s, true)
+    local mxpos = text:find(max_s, (mnpos or 1) + #min_s, true)
+    if lpos then
+      marks[#marks + 1] = { group = "impetusInfoStatLabel", lnum = lnum, col_start = lpos - 1, col_end = lpos - 1 + #label }
+    end
+    if tpos then
+      marks[#marks + 1] = { group = "impetusInfoNumber", lnum = lnum, col_start = tpos - 1, col_end = tpos - 1 + #total_s }
+    end
+    if mnpos and min_id then
+      marks[#marks + 1] = { group = "impetusInfoNumber", lnum = lnum, col_start = mnpos - 1, col_end = mnpos - 1 + #min_s }
+    end
+    if mxpos and max_id then
+      marks[#marks + 1] = { group = "impetusInfoNumber", lnum = lnum, col_start = mxpos - 1, col_end = mxpos - 1 + #max_s }
+    end
+  end
+
   add_line("MODEL INFORMATION", { group = "impetusHeader" })
   add_line(string.rep("-", 50), { group = "impetusDivider" })
   add_line("File: " .. vim.fn.fnamemodify(root.path, ":t"), { group = "impetusFieldName", target = { path = root.path, row = 1 } })
-  add_stats_table_row("Commands (model)", model_stats.total, "Unique types", model_unique)
   add_stats_table_row("Included files", model_stats.include_files, "Parameters", model_stats.parameters)
   add_stats_table_row("Total lines", model_stats.lines, "Main file lines", root.parsed.total_lines or 0)
-  add_stats_table_row("Parts", model_part_total, "Materials", model_material_total)
-  add_stats_table_row("Nodes", model_node_total, "Elements", model_element_total)
-  add_stats_table_row("Node ID min/max", string.format("%s / %s", tostring(model_stats.min_node_id or "-"), tostring(model_stats.max_node_id or "-")), "Elem ID min/max", string.format("%s / %s", tostring(model_stats.min_element_id or "-"), tostring(model_stats.max_element_id or "-")))
+  -- Model commands summary line (use same two-column layout so numbers align)
+  add_stats_table_row("Model commands", string.format("%d (%d)", model_stats.total, model_unique), "", "")
+  -- Column header for the object-stats table
+  do
+    local hdr = string.format("  %-12s %7s   %8s   %8s", "", "total", "Min.ID", "Max.ID")
+    add_line(hdr, { group = "impetusInfoStatLabel" })
+  end
+  add_model_stat_row("Parts:",     model_part_total,     model_stats.min_part_id,     model_stats.max_part_id)
+  add_model_stat_row("Materials:", model_material_total, model_stats.min_material_id, model_stats.max_material_id)
+  add_model_stat_row("Nodes:",     model_node_total,     model_stats.min_node_id,     model_stats.max_node_id)
+  add_model_stat_row("Elements:",  model_element_total,  model_stats.min_element_id,  model_stats.max_element_id)
   add_line("")
 
   add_line("FILE TREE", { group = "impetusOptions" })
   add_line(string.rep("-", 50), { group = "impetusDivider" })
 
-  local function pad_right_stats(left, right, min_gap)
-    local total_width = 50
-    local gap = min_gap or 2
-    local left_w = vim.fn.strdisplaywidth(left)
-    local right_w = vim.fn.strdisplaywidth(right)
-    if left_w + gap + right_w >= total_width then
-      return left .. string.rep(" ", gap) .. right
+  local FILE_TREE_TOTAL_WIDTH = 50
+  local FILE_TREE_STATS_WIDTH = 29  -- shifted left so params column aligns with Parameters above
+
+  local function truncate_to_width(str, max_w)
+    local w = vim.fn.strdisplaywidth(str)
+    if w <= max_w then
+      return str
     end
-    return left .. string.rep(" ", total_width - left_w - right_w) .. right
+    local low, high = 1, vim.fn.strchars(str)
+    local best = ""
+    while low <= high do
+      local mid = math.floor((low + high) / 2)
+      local sub = vim.fn.strcharpart(str, 0, mid)
+      local sw = vim.fn.strdisplaywidth(sub)
+      if sw <= max_w - 3 then
+        best = sub
+        low = mid + 1
+      else
+        high = mid - 1
+      end
+    end
+    return best .. "..."
   end
 
-  local function fmt_stats(kw, uniq, lines_count)
-    return string.format("%3d  %3d  %9d", kw or 0, uniq or 0, lines_count or 0)
+  local function pad_right_stats(left, right, min_gap)
+    local gap = min_gap or 2
+    local max_left_w = FILE_TREE_TOTAL_WIDTH - FILE_TREE_STATS_WIDTH - gap
+    local left_w = vim.fn.strdisplaywidth(left)
+    if left_w > max_left_w then
+      left = truncate_to_width(left, max_left_w)
+      left_w = vim.fn.strdisplaywidth(left)
+    end
+    local pad = FILE_TREE_TOTAL_WIDTH - FILE_TREE_STATS_WIDTH - left_w
+    if pad < gap then
+      pad = gap
+    end
+    return left .. string.rep(" ", pad) .. right
+  end
+
+  local function fmt_stats(kw, uniq, lines_count, params)
+    local kw_str = string.format("%d(%d)", kw or 0, uniq or 0)
+    if #kw_str > 8 then
+      kw_str = kw_str:sub(1, 8)
+    end
+    -- right-align numbers so units digit lines up across rows
+    return string.format("%8s %9d  %6d", kw_str, lines_count or 0, params or 0)
   end
 
   do
     local left = "file"
-    local right = " kw  uniq      lines"
+    -- Header uses the same %8s / %9s / %6s widths so labels line up with data.
+    local right = string.format("%8s %9s  %6s", "kw(uniq)", "lines", "params")
     local rendered = pad_right_stats(left, right, 3)
     local lnum = add_line(rendered, { group = "impetusInfoStatLabel" })
     local stats_col = rendered:find(right, 1, true)
@@ -1082,7 +1188,7 @@ local function render(source_buf, source_win)
     elseif node.skipped then
       right = "[skipped non-k]"
     else
-      right = fmt_stats(node.parsed.total_keywords, node.parsed.unique_keywords, node.parsed.total_lines)
+      right = fmt_stats(node.parsed.total_keywords, node.parsed.unique_keywords, node.parsed.total_lines, node.parsed.total_parameters)
     end
     file_tree_row_index = file_tree_row_index + 1
     local rendered = pad_right_stats(left, right, 3)
@@ -1114,7 +1220,8 @@ local function render(source_buf, source_win)
   add_line("COMMAND TREE", { group = "impetusDefault" })
   add_line(string.rep("-", 50), { group = "impetusDivider" })
 
-  local function emit_keywords_for_file(node, prefix, is_last)
+  local function emit_keywords_for_file(node, prefix, is_last, show_filename)
+    show_filename = show_filename ~= false
     if node.skipped then
       return
     end
@@ -1136,39 +1243,148 @@ local function render(source_buf, source_win)
       return
     end
 
-    local marker = (is_last and "└─ " or "├─ ")
-    local name = vim.fn.fnamemodify(node.path or "?", ":t")
-    local file_text = prefix .. marker .. name
-    local file_lnum = add_line(file_text, { group = "impetusFieldName", target = { path = node.path, row = 1 } })
-    local name_pos = file_text:find(name, 1, true)
-    if name_pos and name_pos > 1 then
-      marks[#marks + 1] = {
-        group = "impetusInfoBranch",
-        lnum = file_lnum,
-        col_start = 0,
-        col_end = name_pos - 1,
-      }
-    end
-    local inner_prefix = prefix .. (is_last and "   " or "│  ")
-
-    for _, k in ipairs(node.parsed.keywords or {}) do
-      local text = inner_prefix .. "├─ " .. k.keyword
-      local lnum = add_line(text, {
-        group = "impetusInfoKeyword",
-        target = { path = node.path, row = k.row, keyword = k.keyword },
-        active_key = (vim.fn.fnamemodify(node.path, ":p") .. "::" .. k.keyword:upper() .. "::" .. tostring(k.occ or 1)),
-      })
-      local pos = text:find(k.keyword, 1, true)
-      if pos then
-        if pos > 1 then
-          marks[#marks + 1] = { group = "impetusInfoBranch", lnum = lnum, col_start = 0, col_end = pos - 1 }
-        end
-        marks[#marks + 1] = { group = "impetusInfoKeyword", lnum = lnum, col_start = pos - 1, col_end = pos - 1 + #k.keyword }
+    local inner_prefix
+    if show_filename then
+      local marker = (is_last and "└─ " or "├─ ")
+      local name = vim.fn.fnamemodify(node.path or "?", ":t")
+      local file_text = prefix .. marker .. name
+      local file_lnum = add_line(file_text, { group = "impetusFieldName", target = { path = node.path, row = 1 } })
+      local name_pos = file_text:find(name, 1, true)
+      if name_pos and name_pos > 1 then
+        marks[#marks + 1] = {
+          group = "impetusInfoBranch",
+          lnum = file_lnum,
+          col_start = 0,
+          col_end = name_pos - 1,
+        }
       end
+      inner_prefix = prefix .. (is_last and "   " or "│  ")
+    else
+      inner_prefix = prefix
     end
 
-    for i, ch in ipairs(node.children or {}) do
-      emit_keywords_for_file(ch, inner_prefix, i == #node.children)
+    -- Count keyword occurrences within this file for fold grouping
+    local kw_counts = {}
+    for _, k in ipairs(node.parsed.keywords or {}) do
+      kw_counts[k.keyword:upper()] = (kw_counts[k.keyword:upper()] or 0) + 1
+    end
+
+    local keywords = node.parsed.keywords or {}
+    local ki = 1
+    local child_idx = 1
+    while ki <= #keywords do
+      local k = keywords[ki]
+      local ku = k.keyword:upper()
+
+      if ku == "*INCLUDE" then
+        local ch = node.children[child_idx]
+        child_idx = child_idx + 1
+
+        -- Output *INCLUDE keyword line
+        local inc_text = inner_prefix .. "├─ " .. k.keyword
+        local inc_lnum = add_line(inc_text, {
+          group = "impetusInfoKeyword",
+          target = { path = node.path, row = k.row, keyword = k.keyword },
+          active_key = (vim.fn.fnamemodify(node.path, ":p") .. "::" .. k.keyword:upper() .. "::" .. tostring(k.occ or 1)),
+        })
+        local pos = inc_text:find(k.keyword, 1, true)
+        if pos then
+          if pos > 1 then
+            marks[#marks + 1] = { group = "impetusInfoBranch", lnum = inc_lnum, col_start = 0, col_end = pos - 1 }
+          end
+          marks[#marks + 1] = { group = "impetusInfoKeyword", lnum = inc_lnum, col_start = pos - 1, col_end = pos - 1 + #k.keyword }
+        end
+
+        if ch then
+          local ch_prefix = inner_prefix .. "│  "
+          local ch_name = vim.fn.fnamemodify(ch.path or "?", ":t")
+          if ch.skipped then
+            local skip_text = ch_prefix .. "└─ " .. ch_name .. "  (skipped)"
+            local skip_lnum = add_line(skip_text, { group = "impetusInfoFile", target = { path = ch.path } })
+            local sp = skip_text:find(ch_name, 1, true)
+            if sp then
+              if sp > 1 then
+                marks[#marks + 1] = { group = "impetusInfoBranch", lnum = skip_lnum, col_start = 0, col_end = sp - 1 }
+              end
+              marks[#marks + 1] = { group = "impetusInfoFile", lnum = skip_lnum, col_start = sp - 1, col_end = sp - 1 + #ch_name }
+            end
+          elseif ch.missing then
+            local miss_text = ch_prefix .. "└─ " .. ch_name .. "  (missing)"
+            local miss_lnum = add_line(miss_text, { group = "impetusInfoFile", target = { path = ch.path } })
+            local mp = miss_text:find(ch_name, 1, true)
+            if mp then
+              if mp > 1 then
+                marks[#marks + 1] = { group = "impetusInfoBranch", lnum = miss_lnum, col_start = 0, col_end = mp - 1 }
+              end
+              marks[#marks + 1] = { group = "impetusInfoFile", lnum = miss_lnum, col_start = mp - 1, col_end = mp - 1 + #ch_name }
+            end
+          else
+            -- Output child filename as sub-node of *INCLUDE
+            local ch_text = ch_prefix .. "└─ " .. ch_name
+            local ch_lnum = add_line(ch_text, { group = "impetusInfoFile", target = { path = ch.path } })
+            local name_pos = ch_text:find(ch_name, 1, true)
+            if name_pos then
+              if name_pos > 1 then
+                marks[#marks + 1] = { group = "impetusInfoBranch", lnum = ch_lnum, col_start = 0, col_end = name_pos - 1 }
+              end
+              marks[#marks + 1] = { group = "impetusInfoFile", lnum = ch_lnum, col_start = name_pos - 1, col_end = name_pos - 1 + #ch_name }
+            end
+            -- Recursively emit child's keywords without repeating the filename
+            local grandchild_prefix = ch_prefix .. "   "
+            emit_keywords_for_file(ch, grandchild_prefix, true, false)
+          end
+        end
+
+        ki = ki + 1
+      else
+        -- Count consecutive occurrences of this keyword starting from ki
+        local consecutive = 1
+        for j = ki + 1, #keywords do
+          if keywords[j].keyword:upper() == ku then
+            consecutive = consecutive + 1
+          else
+            break
+          end
+        end
+
+        local text = inner_prefix .. "├─ " .. k.keyword
+        local lnum = add_line(text, {
+          group = "impetusInfoKeyword",
+          target = { path = node.path, row = k.row, keyword = k.keyword },
+          active_key = (vim.fn.fnamemodify(node.path, ":p") .. "::" .. k.keyword:upper() .. "::" .. tostring(k.occ or 1)),
+        })
+        if consecutive > 1 then
+          pane.foldable_lines[lnum] = true
+          pane.first_fold_line[lnum] = { keyword = k.keyword, count = consecutive }
+          -- Emit the remaining consecutive occurrences as hidden fold lines
+          for j = ki + 1, ki + consecutive - 1 do
+            local k2 = keywords[j]
+            local text2 = inner_prefix .. "│  " .. k2.keyword
+            local lnum2 = add_line(text2, {
+              group = "impetusInfoKeyword",
+              target = { path = node.path, row = k2.row, keyword = k2.keyword },
+              active_key = (vim.fn.fnamemodify(node.path, ":p") .. "::" .. k2.keyword:upper() .. "::" .. tostring(k2.occ or 1)),
+            })
+            pane.foldable_lines[lnum2] = true
+            local pos2 = text2:find(k2.keyword, 1, true)
+            if pos2 then
+              if pos2 > 1 then
+                marks[#marks + 1] = { group = "impetusInfoBranch", lnum = lnum2, col_start = 0, col_end = pos2 - 1 }
+              end
+              marks[#marks + 1] = { group = "impetusInfoKeyword", lnum = lnum2, col_start = pos2 - 1, col_end = pos2 - 1 + #k2.keyword }
+            end
+          end
+        end
+        local pos = text:find(k.keyword, 1, true)
+        if pos then
+          if pos > 1 then
+            marks[#marks + 1] = { group = "impetusInfoBranch", lnum = lnum, col_start = 0, col_end = pos - 1 }
+          end
+          marks[#marks + 1] = { group = "impetusInfoKeyword", lnum = lnum, col_start = pos - 1, col_end = pos - 1 + #k.keyword }
+        end
+
+        ki = ki + consecutive
+      end
     end
   end
   emit_keywords_for_file(root, "", true)
@@ -1247,6 +1463,33 @@ local function render(source_buf, source_win)
     highlight_numbers(pane.buf, i - 1, line)
   end
 
+  -- Configure folding for duplicate keywords in the command tree
+  if pane.win and vim.api.nvim_win_is_valid(pane.win) then
+    vim.wo[pane.win].foldmethod = "manual"
+    vim.wo[pane.win].foldenable = true
+    vim.wo[pane.win].foldcolumn = "auto:1"
+    if pane.foldable_lines and next(pane.foldable_lines) then
+      vim.wo[pane.win].foldlevel = 0
+      vim.api.nvim_set_option_value("foldtext", "v:lua.require'impetus.info'._foldtext()", { win = pane.win })
+      vim.api.nvim_win_call(pane.win, function()
+        pcall(vim.cmd, "silent! normal! zE")
+      end)
+      -- Create one manual fold per duplicate-keyword group (title + repeats)
+      for lnum0, info in pairs(pane.first_fold_line or {}) do
+        local start_row = lnum0 + 1 -- 1-based title line
+        local end_row = start_row + info.count - 1
+        if end_row > start_row then
+          vim.api.nvim_win_call(pane.win, function()
+            pcall(vim.cmd, string.format("silent! %d,%dfold", start_row, end_row))
+          end)
+        end
+      end
+    else
+      vim.wo[pane.win].foldlevel = 99
+      vim.wo[pane.win].foldenable = false
+    end
+  end
+
   pane.source_buf = source_buf
   pane.source_win = source_win
   if (not pane.main_win or not vim.api.nvim_win_is_valid(pane.main_win))
@@ -1300,10 +1543,10 @@ function M.sync_active()
       vim.api.nvim_buf_add_highlight(pane.buf, state.ns_active, "impetusHelpActiveParam", lnum, p - 1, p - 1 + #kw)
     end
   end
-  if first_active and pane.win and vim.api.nvim_win_is_valid(pane.win) then
+  -- Keep viewport at the top of the info pane; do not scroll to the active keyword.
+  if pane.win and vim.api.nvim_win_is_valid(pane.win) then
     pcall(vim.api.nvim_win_call, pane.win, function()
-      vim.api.nvim_win_set_cursor(pane.win, { first_active + 1, 0 })
-      vim.cmd("normal! zz")
+      vim.api.nvim_win_set_cursor(pane.win, { 1, 0 })
     end)
   end
 end
@@ -1471,6 +1714,29 @@ function M.open_in_nav_win(file_path, row, col)
     vim.cmd("normal! zz")
   end
   return true
+end
+
+function M.foldexpr(lnum)
+  local pane = state.pane
+  if not pane or not pane.foldable_lines then
+    return 0
+  end
+  if pane.foldable_lines[lnum - 1] then
+    return 1
+  end
+  return 0
+end
+
+function M._foldtext()
+  local fold_start = vim.v.foldstart
+  local lnum0 = fold_start - 1
+  local p = state.pane
+  if p and p.first_fold_line and p.first_fold_line[lnum0] then
+    local info = p.first_fold_line[lnum0]
+    local line = vim.fn.getline(fold_start)
+    return line .. "  (" .. (info.count - 1) .. ")"
+  end
+  return vim.fn.getline(fold_start)
 end
 
 function M.setup()

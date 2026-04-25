@@ -2161,21 +2161,21 @@ function M.color_match_blocks()
   local buf = vim.api.nvim_get_current_buf()
   local lines = get_lines(buf)
 
-  -- 清除旧的高亮和虚拟文本
+  -- Clear old highlights and virtual text
   local ns_id = vim.api.nvim_create_namespace("impetus_match_pairs")
   vim.api.nvim_buf_clear_namespace(buf, ns_id, 0, -1)
 
-  -- 定义配对块的颜色（只用前景色）
+  -- Define matched block colors (foreground only)
   local colors = {
-    "#ff6b6b",  -- 红色
-    "#4ecdc4",  -- 青色
-    "#ffe66d",  -- 黄色
-    "#a8e6cf",  -- 绿色
-    "#c7ceea",  -- 紫色
-    "#ff9999",  -- 浅红色
+    "#ff6b6b",  -- Red
+    "#4ecdc4",  -- Cyan
+    "#ffe66d",  -- Yellow
+    "#a8e6cf",  -- Green
+    "#c7ceea",  -- Purple
+    "#ff9999",  -- Light red
   }
 
-  -- 为每种颜色创建高亮组（虚拟文本标签的颜色）
+  -- Create highlight group for each color (virtual text label color)
   for i, color in ipairs(colors) do
     local hl_group = "impetusMatchPair" .. i
     vim.api.nvim_set_hl(0, hl_group, {
@@ -2187,7 +2187,7 @@ function M.color_match_blocks()
   local pair_count = 0
   local processed = {}
 
-  -- 处理 if 块
+  -- Process if blocks
   for row = 1, #lines do
     if processed[row] then goto continue end
 
@@ -2200,7 +2200,7 @@ function M.color_match_blocks()
         local hl_group = "impetusMatchPair" .. color_idx
         local label = string.format("[Pair %d]", pair_count)
 
-        -- 只在开始行和结束行添加虚拟文本标签
+        -- Only add virtual text labels on start and end lines
         vim.api.nvim_buf_set_extmark(buf, ns_id, row - 1, -1, {
           virt_text = { { label, hl_group } },
           virt_text_pos = "eol",
@@ -2218,7 +2218,7 @@ function M.color_match_blocks()
     ::continue::
   end
 
-  -- 处理 repeat 块
+  -- Process repeat blocks
   for row = 1, #lines do
     if processed[row] then goto continue_repeat end
 
@@ -2248,7 +2248,7 @@ function M.color_match_blocks()
     ::continue_repeat::
   end
 
-  -- 处理 convert 块
+  -- Process convert blocks
   for row = 1, #lines do
     if processed[row] then goto continue_convert end
 
@@ -2289,7 +2289,7 @@ function M.check_blocks()
   local buf = vim.api.nvim_get_current_buf()
   local lines = get_lines(buf)
 
-  -- 追踪三种块类型的堆栈
+  -- Track stacks for three block types
   local if_stack = {}
   local repeat_stack = {}
   local convert_stack = {}
@@ -2358,7 +2358,7 @@ function M.check_blocks()
     ::continue::
   end
 
-  -- 添加未闭合的块
+  -- Add unclosed blocks
   for _, line in ipairs(if_stack) do
     table.insert(issues, {
       line = line,
@@ -2386,14 +2386,14 @@ function M.check_blocks()
     })
   end
 
-  -- 显示结果
+  -- Display results
   if #issues == 0 then
     vim.notify("✅ All control blocks are properly matched!", vim.log.levels.INFO, { title = "Block Check" })
   else
-    -- 按行号排序
+    -- Sort by line number
     table.sort(issues, function(a, b) return a.line < b.line end)
 
-    -- 构建消息
+    -- Build message
     local msg_lines = { "❌ Found " .. #issues .. " block matching issue(s):\n" }
     for _, issue in ipairs(issues) do
       table.insert(msg_lines, issue.message)
@@ -2402,7 +2402,7 @@ function M.check_blocks()
     local full_msg = table.concat(msg_lines, "\n")
     vim.notify(full_msg, vim.log.levels.WARN, { title = "Block Check" })
 
-    -- 跳转到第一个问题
+    -- Jump to first issue
     if issues[1] then
       vim.api.nvim_win_set_cursor(0, { issues[1].line, 0 })
     end
@@ -2423,20 +2423,20 @@ function M.jump_match_block()
 
   local target_row = nil
 
-  -- 处理 if-family (if/else_if/else/end_if)
+  -- Process if-family (if/else_if/else/end_if)
   if k == "if_start" then
     target_row = matching_end_row_for_start(lines, row, "if_start", "if_end")
   elseif k == "if_end" then
     target_row = matching_start_row_for_end(lines, row, "if_end", "if_start")
   elseif k == "if_mid" then
-    -- 从 else_if/else 跳到 end_if
+    -- Jump from else_if/else to end_if
     target_row = matching_end_row_for_start(lines, row, "if_start", "if_end")
-  -- 处理 repeat-family (repeat/end_repeat)
+  -- Process repeat-family (repeat/end_repeat)
   elseif k == "repeat_start" then
     target_row = matching_end_row_for_start(lines, row, "repeat_start", "repeat_end")
   elseif k == "repeat_end" then
     target_row = matching_start_row_for_end(lines, row, "repeat_end", "repeat_start")
-  -- 处理 convert-family (convert_from/end_convert)
+  -- Process convert-family (convert_from/end_convert)
   elseif k == "convert_start" then
     target_row = matching_end_row_for_start(lines, row, "convert_start", "convert_end")
   elseif k == "convert_end" then
@@ -2446,7 +2446,7 @@ function M.jump_match_block()
   if target_row then
     vim.api.nvim_win_set_cursor(0, { target_row, 0 })
 
-    -- 自动显示配对着色
+    -- Auto-show match coloring
     M.color_match_blocks()
 
     vim.notify(
@@ -2460,7 +2460,7 @@ function M.jump_match_block()
 end
 
 function M.toggle_all_folds()
-  -- 同时折叠所有关键字块和控制块
+  -- Fold all keyword blocks and control blocks at the same time
   M.toggle_all_keyword_folds()
   M.toggle_all_control_folds()
 end

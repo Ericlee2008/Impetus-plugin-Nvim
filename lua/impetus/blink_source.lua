@@ -102,11 +102,24 @@ function Source:get_completions(context, resolve)
   })
 end
 
+local function jump_to_next_field()
+  local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
+  local line = vim.api.nvim_get_current_line()
+  -- Search from current position (col0+1 in 1-based handles cursor at "X" or at the trailing comma)
+  local next_comma = line:find(",", col0 + 1, true)
+  if next_comma then
+    local new_col0 = next_comma  -- 0-based position right after the comma
+    while new_col0 < #line and line:sub(new_col0 + 1, new_col0 + 1):match("%s") do
+      new_col0 = new_col0 + 1
+    end
+    vim.api.nvim_win_set_cursor(0, { row, new_col0 })
+  end
+  vim.cmd("startinsert")
+end
+
 function Source:execute(_, _, callback, default_implementation)
   default_implementation()
-  vim.schedule(function()
-    vim.cmd("startinsert")
-  end)
+  vim.schedule(jump_to_next_field)
   callback()
 end
 

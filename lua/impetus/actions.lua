@@ -4,6 +4,7 @@ local template = require("impetus.template")
 local analysis = require("impetus.analysis")
 local store = require("impetus.store")
 local schema = require("impetus.schema")
+local log = require("impetus.log")
 
 local M = {}
 local nav_cache = {}
@@ -48,11 +49,11 @@ local function parse_option_content(text, add_item)
   if body:find("%-%>") then
     local pos = 1
     while true do
-      local s, e, key = body:find("([%a][%w_]*)%s*%-%>", pos)
+      local s, e, key = body:find("([%a%d][%w_]*)%s*%-%>", pos)
       if not s then
         break
       end
-      local next_s = body:find("%s+[%a][%w_]*%s*%-%>", e + 1)
+      local next_s = body:find("%s+[%a%d][%w_]*%s*%-%>", e + 1)
       local rhs = next_s and body:sub(e + 1, next_s - 1) or body:sub(e + 1)
       key = normalize_popup_token(key)
       rhs = trim((rhs or ""):gsub("^%s*", ""))
@@ -519,6 +520,7 @@ local function ensure_manual_fold_mode()
   vim.wo.foldmethod = "manual"
   vim.wo.foldenable = true
   vim.wo.foldlevel = 99
+  vim.wo.foldcolumn = "auto:1"
 end
 
 local function close_manual_range(s, e)
@@ -2398,6 +2400,52 @@ function M.toggle_all_folds()
   refresh_fold_render("single")
 end
 
+-- Close everything unconditionally (keyword + control blocks).
+function M.close_all_folds()
+  local lines = get_lines(vim.api.nvim_get_current_buf())
+  local st = ensure_fold_ui_state()
+  for _, r in ipairs(collect_keyword_ranges(lines)) do
+    st.kw_closed[range_toggle_key(r.s, r.e)] = true
+  end
+  for _, r in ipairs(collect_control_ranges(lines)) do
+    st.ctrl_closed[range_toggle_key(r.s, r.e)] = true
+  end
+  save_fold_ui_state(st)
+  rebuild_all_manual_folds(lines)
+  refresh_fold_render("single")
+end
+
+-- Release the outermost still-closed control fold, peeling inward one layer at a time.
+function M.release_outer_control_fold()
+  local lines = get_lines(vim.api.nvim_get_current_buf())
+  local st = ensure_fold_ui_state()
+  local ranges = collect_control_ranges(lines)
+  local closed = {}
+  for _, r in ipairs(ranges) do
+    local key = range_toggle_key(r.s, r.e)
+    if st.ctrl_closed[key] == true then
+      closed[#closed + 1] = r
+    end
+  end
+  if #closed == 0 then
+    return
+  end
+  -- Sort outermost first: smaller start, larger end
+  table.sort(closed, function(a, b)
+    if a.s == b.s then
+      return a.e > b.e
+    end
+    return a.s < b.s
+  end)
+  local outer = closed[1]
+  st.ctrl_closed[range_toggle_key(outer.s, outer.e)] = nil
+  save_fold_ui_state(st)
+  local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
+  rebuild_all_manual_folds(lines)
+  vim.api.nvim_win_set_cursor(0, { row, col0 })
+  refresh_fold_render("single")
+end
+
 function M.toggle_fold_here()
   return M.toggle_keyword_fold_here()
 end
@@ -2488,6 +2536,7 @@ function M.show_ref_completion()
   for _, id in ipairs(analysis.suggest_object_values(bufnr, ctx, "")) do
     add_item(id, "", "object")
   end
+  local skip_desc = false
   if (ctx.param_name or ""):match("^pmeth_") then
     add_item("A", "acceleration", "mapping")
     add_item("V", "velocity", "mapping")
@@ -2496,8 +2545,17 @@ function M.show_ref_completion()
     for _, token in ipairs({ "X", "Y", "Z", "RX", "RY", "RZ" }) do
       add_item(token, "", "options")
     end
+  elseif (ctx.keyword or ""):upper() == "*UNIT_SYSTEM" and ctx.param_name == "units" then
+    for _, token in ipairs({
+      "SI", "MMTONS", "MM/TON/S", "CMGUS", "CM/G/US", "IPS",
+      "MMKGMS", "MM/KG/MS", "CMGS", "CM/G/S", "MMGMS", "MM/G/MS",
+      "MMMGMS", "MM/MG/MS",
+    }) do
+      add_item(token, "", "options")
+    end
+    skip_desc = true
   end
-  if desc and desc ~= "" then
+  if not skip_desc and desc and desc ~= "" then
     local opt = desc:match("%[options:%s*(.-)%]")
     if opt then
       parse_option_content(opt, add_item)
@@ -2508,9 +2566,10 @@ function M.show_ref_completion()
       if inline_opt and inline_opt ~= "" then
         parse_option_content(inline_opt, add_item)
       end
-      -- Only parse standalone `lhs -> rhs` lines, not lines that contain [options: ...]
-      -- (those are already handled by parse_option_content above and the lhs would be polluted)
-      if not line_part:match("%[options:") then
+      -- Only parse standalone `lhs -> rhs` lines, not lines that contain [options: ...] or
+      -- an inline "options: ..." segment (those are already handled by parse_option_content
+      -- above, and the lhs -> rhs pattern would extract garbage from them).
+      if not (inline_opt and inline_opt ~= "") and not line_part:match("%[options:") then
         local lhs, rhs = line_part:match("^%s*(.-)%s*%-%>%s*(.+)%s*$")
         if lhs and rhs then
           local key = normalize_popup_token((lhs or ""):match("^([^%s]+)") or "")
@@ -2584,7 +2643,24 @@ function M.show_ref_completion()
     end
     local new_line = line:sub(1, s - 1) .. insert_text .. line:sub(e + 1)
     vim.api.nvim_set_current_line(new_line)
-    set_cursor(row, s - 1 + #insert_text)
+    local cur_col0 = s - 1 + #insert_text
+    -- Jump to the next CSV field after inserting
+    local next_comma = new_line:find(",", cur_col0 + 1, true)
+    if next_comma then
+      local new_col0 = next_comma  -- 0-based position after the comma
+      while new_col0 < #new_line and new_line:sub(new_col0 + 1, new_col0 + 1):match("%s") do
+        new_col0 = new_col0 + 1
+      end
+      set_cursor(row, new_col0)
+    else
+      set_cursor(row, cur_col0)
+    end
+    vim.cmd("startinsert")
+    -- Force side-help refresh: WinClosed sets suspend=true, which blocks the
+    -- CursorMoved autocmd that normally updates help highlighting.
+    vim.schedule(function()
+      pcall(side_help.render, bufnr, vim.api.nvim_get_current_win())
+    end)
   end
 
   open_option_popup(
@@ -2598,6 +2674,17 @@ function M.show_ref_completion()
         end
       end
       apply_value(choice)
+      if choice and choice.value ~= "" then
+        log.append("ref-complete", {
+          string.format(
+            "  %s.%s field=%d -> %s",
+            ctx.keyword or "keyword",
+            ctx.param_name or "param",
+            ctx.field_idx or 0,
+            choice.value
+          ),
+        })
+      end
     end
   )
 end

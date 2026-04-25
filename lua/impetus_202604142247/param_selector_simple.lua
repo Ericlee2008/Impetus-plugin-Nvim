@@ -190,26 +190,26 @@ function M.show_param_selector()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local current_line = lines[row + 1] or ""
 
-  print("=== 详细调试 ===")
-  print("光标位置: Row=" .. row .. " Col=" .. col)
-  print("当前行内容: " .. current_line)
+  print("=== Detailed Debug ===")
+  print("Cursor position: Row=" .. row .. " Col=" .. col)
+  print("Current line content: " .. current_line)
 
   local context = get_cursor_context()
   if not context then
-    print("get_cursor_context() 返回 nil")
+    print("get_cursor_context() returned nil")
     vim.notify("Not on a valid parameter", vim.log.levels.WARN)
     return
   end
 
-  print("识别到的关键字: " .. context.keyword)
-  print("识别到的参数名: " .. context.param_name)
-  print("识别到的参数索引: " .. context.param_idx)
+  print("Recognized keyword: " .. context.keyword)
+  print("Recognized param name: " .. context.param_name)
+  print("Recognized param index: " .. context.param_idx)
 
   -- Parse current line to show parameters
   local params_in_row = split_csv(current_line)
-  print("当前行参数个数: " .. #params_in_row)
+  print("Current line param count: " .. #params_in_row)
   for i, p in ipairs(params_in_row) do
-    print("  参数 " .. i .. ": [" .. p.start_col .. "-" .. p.end_col .. "] = '" .. p.value .. "'")
+    print("  Param " .. i .. ": [" .. p.start_col .. "-" .. p.end_col .. "] = '" .. p.value .. "'")
   end
 
   local ok, db = pcall(require("impetus.store").get_db)
@@ -226,21 +226,21 @@ function M.show_param_selector()
 
   local param_detail = kw_entry.details[context.param_idx]
   if not param_detail or not param_detail.description then
-    print("参数 " .. context.param_idx .. " 无描述")
+    print("Param " .. context.param_idx .. " has no description")
     vim.notify("No parameter info: param_idx=" .. context.param_idx, vim.log.levels.INFO)
     return
   end
 
-  print("参数描述: " .. param_detail.description)
+  print("Param description: " .. param_detail.description)
 
   local options = extract_options_from_description(param_detail.description)
   if not options or #options == 0 then
-    print("无法提取选项")
-    vim.notify(context.keyword .. " " .. context.param_name .. " 无选项", vim.log.levels.INFO)
+    print("Cannot extract options")
+    vim.notify(context.keyword .. " " .. context.param_name .. " no options", vim.log.levels.INFO)
     return
   end
 
-  print("提取的选项: " .. table.concat(options, ", "))
+  print("Extracted options: " .. table.concat(options, ", "))
   local msg = context.keyword .. " " .. context.param_name .. " -> " .. table.concat(options, " | ")
   vim.notify(msg, vim.log.levels.INFO)
 end

@@ -2,8 +2,8 @@ local complete = require("impetus.complete")
 local template = require("impetus.template")
 local store = require("impetus.store")
 
--- 【诊断】确认模块被加载
-vim.notify("[blink_source] 模块已加载", vim.log.levels.WARN)
+-- [DIAG] confirm module loaded
+vim.notify("[blink_source] module loaded", vim.log.levels.WARN)
 
 local Source = {}
 
@@ -49,11 +49,11 @@ local function subseq_match(key, base)
 end
 
 local function rank_keywords_by_input(base)
-  -- 【关键诊断】确认这个函数是否被调用
+  -- [KEY DIAG] confirm if this function is called
   local log_path = vim.fn.stdpath("cache") .. "/impetus_blink.log"
   local f = io.open(log_path, "a")
   if f then
-    f:write(string.format(">>> RANK_KEYWORDS_BY_INPUT 被调用了!!! base='%s'\n", base))
+    f:write(string.format(">>> RANK_KEYWORDS_BY_INPUT called!!! base='%s'\n", base))
     f:close()
   end
 
@@ -69,29 +69,29 @@ local function rank_keywords_by_input(base)
   for _, kw in ipairs(kws) do
     local key = normalize_keyword(kw)
 
-    -- 【改进】Tier 1: 严格前缀匹配（BC开头）
+    -- [IMPROVEMENT] Tier 1: strict prefix match (BC at start)
     local pos = key:find(needle, 1, true)
     if pos == 1 then
       ranked[#ranked + 1] = { item = kw, tier = 1, span = #needle, key = key }
     elseif pos then
-      -- 【改进】Tier 2: 包含匹配（BC在中间）
+      -- [IMPROVEMENT] Tier 2: contains match (BC in middle)
       ranked[#ranked + 1] = { item = kw, tier = 2, span = #needle, pos = pos, key = key }
     else
-      -- 【改进】Tier 3+: 模糊匹配，根据匹配的紧凑程度分tier
+      -- [IMPROVEMENT] Tier 3+: fuzzy match, tiered by match compactness
       local first_pos, s_span = subseq_match(key, needle)
       if first_pos then
-        -- 根据span（B和C之间的距离）来分tier
-        -- span越小（匹配越紧凑）tier越小（优先级越高）
-        local distance = s_span - #needle  -- B和C之间相隔的字符数
-        local fuzzy_tier = 3 + math.floor(distance / 2)  -- 每2个间隔增加1个tier
-        fuzzy_tier = math.min(fuzzy_tier, 6)  -- 限制最高tier为6
+        -- tier by span (distance between B and C)
+        -- smaller span (more compact match) -> smaller tier (higher priority)
+        local distance = s_span - #needle  -- number of chars between B and C
+        local fuzzy_tier = 3 + math.floor(distance / 2)  -- +1 tier per 2 gaps
+        fuzzy_tier = math.min(fuzzy_tier, 6)  -- cap max tier at 6
 
         ranked[#ranked + 1] = { item = kw, tier = fuzzy_tier, span = s_span, key = key }
       end
     end
   end
 
-  -- 【诊断】写入排序前的tier分布
+  -- [DIAG] write pre-sort tier distribution
   local tier_count = {}
   for _, r in ipairs(ranked) do
     tier_count[r.tier] = (tier_count[r.tier] or 0) + 1
@@ -104,10 +104,10 @@ local function rank_keywords_by_input(base)
     f:close()
   end
 
-  -- 排序：按tier、span、key、item
+  -- sort: by tier, span, key, item
   table.sort(ranked, function(a, b)
     if a.tier ~= b.tier then return a.tier < b.tier end
-    if a.span ~= b.span then return a.span < b.span end  -- 匹配跨度小的优先
+    if a.span ~= b.span then return a.span < b.span end  -- smaller span first
     if a.key ~= b.key then return a.key < b.key end
     return a.item < b.item
   end)
@@ -117,7 +117,7 @@ local function rank_keywords_by_input(base)
     out[#out + 1] = r.item
   end
 
-  -- 【诊断】写入排序后的结果
+  -- [DIAG] write post-sort result
   if #out > 0 then
     local first_five = {}
     for i = 1, math.min(5, #out) do
@@ -160,7 +160,7 @@ function Source:get_completions(context, resolve)
   local cursor = context.cursor or { vim.api.nvim_win_get_cursor(0)[1], vim.api.nvim_win_get_cursor(0)[2] }
   local cur_col = cursor[2]
 
-  -- 【详细诊断】记录 context 的原始信息
+  -- [DETAIL DIAG] record raw context info
   local log_path = vim.fn.stdpath("cache") .. "/impetus_blink.log"
   local f = io.open(log_path, "a")
   if f then
@@ -175,10 +175,10 @@ function Source:get_completions(context, resolve)
   local start_col = find_start_col(line, cur_col)
   local base = line:sub(start_col + 1, cur_col)
 
-  -- 【诊断】写入文件日志
+  -- [DIAG] write file log
   local f2 = io.open(log_path, "a")
   if f2 then
-    f2:write(string.format("  处理后: line='%s', base='%s', cur_col=%d, start_col=%d\n",
+    f2:write(string.format("  processed: line='%s', base='%s', cur_col=%d, start_col=%d\n",
       line, base, cur_col, start_col))
     f2:close()
   end
@@ -191,7 +191,7 @@ function Source:get_completions(context, resolve)
   local words
   local keyword_ctx = is_keyword_context(line, cur_col)
 
-  -- 【诊断】记录上下文判断
+  -- [DIAG] record context judgment
   local f2 = io.open(log_path, "a")
   if f2 then
     f2:write(string.format("  keyword_ctx=%s, left='%s'\n", keyword_ctx and "TRUE" or "FALSE", line:sub(1, cur_col)))
@@ -225,8 +225,8 @@ function Source:get_completions(context, resolve)
     items[#items + 1] = {
       label = w,
       sortText = string.format("%06d_%s", idx, w:lower()),
-      -- 【改进】添加 score 信息，高 score 表示更优先
-      -- 这样即使 blink.cmp 考虑 score，也会遵循我们的优先级
+      -- [IMPROVEMENT] add score info, higher score = higher priority
+      -- so even if blink.cmp considers score, it follows our priority
       score = 1000 - idx,
       kind = kind,
       insertTextFormat = insert_format,
@@ -240,10 +240,10 @@ function Source:get_completions(context, resolve)
     }
   end
 
-  -- 【关键改进】设置两个标志为 true
-  -- is_incomplete_forward = true: 用户输入更多字符时重新调用
-  -- is_incomplete_backward = true: 用户删除字符时也重新调用
-  -- 这样补全列表会动态随着用户输入实时变化
+  -- [KEY IMPROVEMENT] set both flags to true
+  -- is_incomplete_forward = true: retrigger when user types more chars
+  -- is_incomplete_backward = true: retrigger when user deletes chars
+  -- so completion list updates dynamically with user input
   resolve({ is_incomplete_forward = true, is_incomplete_backward = true, items = items })
 end
 

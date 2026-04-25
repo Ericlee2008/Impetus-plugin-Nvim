@@ -160,13 +160,13 @@ local function render_miniature(buf, win)
     vim.api.nvim_buf_set_option(state.miniature_buf, 'bufhidden', 'hide')
   end
 
-  -- 临时设置为可修改，以便写入内容
+  -- Temporarily set modifiable to write content
   vim.api.nvim_buf_set_option(state.miniature_buf, 'modifiable', true)
 
   local content = create_miniature_content(buf)
   vim.api.nvim_buf_set_lines(state.miniature_buf, 0, -1, false, content)
 
-  -- 写入完成后设置为只读
+  -- Set to readonly after writing
   vim.api.nvim_buf_set_option(state.miniature_buf, 'modifiable', false)
 
   return state.miniature_buf
@@ -177,7 +177,7 @@ end
 -- ═════════════════════════════════════════════════════════════════════════
 
 local function format_tree_line(prefix, name, col1_width)
-  -- 格式化树形行，确保左列宽度固定
+  -- Format tree line, ensure left column width is fixed
   local line = prefix .. name
   local padding = col1_width - #line
   if padding > 0 then
@@ -187,7 +187,7 @@ local function format_tree_line(prefix, name, col1_width)
 end
 
 local function get_unique_keywords(node, uniq_map)
-  -- 递归收集所有唯一的关键字
+  -- Recursively collect all unique keywords
   uniq_map = uniq_map or {}
   if node and node.parsed then
     for _, kw in ipairs(node.parsed.keywords or {}) do
@@ -217,7 +217,7 @@ local function create_expanded_content(buf)
     model_unique = model_unique + 1
   end
 
-  -- 获取所有唯一的关键字
+  -- Get all unique keywords
   local unique_keywords_map = get_unique_keywords(root, {})
   local keyword_list = {}
   for kw, _ in pairs(unique_keywords_map) do
@@ -226,11 +226,11 @@ local function create_expanded_content(buf)
   table.sort(keyword_list)
 
   local lines = {}
-  local col1_width = 25  -- 文件树列宽
-  local col2_width = 22  -- 统计列宽
+  local col1_width = 25  -- File tree column width
+  local col2_width = 22  -- Stats column width
   local separator = " │ "
 
-  -- 标题行
+  -- Title row
   table.insert(lines,
     format_tree_line("FILE TREE", "", col1_width) ..
     separator ..
@@ -239,7 +239,7 @@ local function create_expanded_content(buf)
     "KEYWORDS"
   )
 
-  -- 分割线
+  -- Separator line
   table.insert(lines,
     string.rep("─", col1_width) ..
     separator:gsub(" ", "─") ..
@@ -248,11 +248,11 @@ local function create_expanded_content(buf)
     string.rep("─", 40)
   )
 
-  -- 文件树和统计
+  -- File tree and stats
   local tree_lines = {}
   local stats_lines = {}
 
-  -- 生成文件树（简化版）
+  -- Generate file tree (simplified)
   local function add_tree_node(node, depth)
     local prefix = ""
     if depth > 0 then
@@ -264,7 +264,7 @@ local function create_expanded_content(buf)
     local file_name = vim.fn.fnamemodify(node.path, ":t")
     table.insert(tree_lines, format_tree_line(prefix .. file_name, "", col1_width))
 
-    -- 对应的统计信息
+    -- Corresponding stats info
     local kw = node.parsed.total_keywords or 0
     local lines_count = node.parsed.total_lines or 0
     local stats_text = string.format("kw:%-4d lines:%d", kw, lines_count)
@@ -279,7 +279,7 @@ local function create_expanded_content(buf)
 
   add_tree_node(root, 0)
 
-  -- 关键字列表
+  -- Keyword list
   local keyword_lines = {}
   for _, kw in ipairs(keyword_list) do
     table.insert(keyword_lines, "├─ " .. kw)
@@ -288,7 +288,7 @@ local function create_expanded_content(buf)
     table.insert(keyword_lines, "(no keywords)")
   end
 
-  -- 合并三列
+  -- Merge three columns
   local max_rows = math.max(#tree_lines, #stats_lines, #keyword_lines)
   for i = 1, max_rows do
     local tree_part = tree_lines[i] or string.rep(" ", col1_width)
@@ -309,13 +309,13 @@ local function render_expanded(buf, win)
     vim.api.nvim_buf_set_option(state.expanded_buf, 'bufhidden', 'hide')
   end
 
-  -- 临时设置为可修改，以便写入内容
+  -- Temporarily set modifiable to write content
   vim.api.nvim_buf_set_option(state.expanded_buf, 'modifiable', true)
 
   local content = create_expanded_content(buf)
   vim.api.nvim_buf_set_lines(state.expanded_buf, 0, -1, false, content)
 
-  -- 写入完成后设置为只读
+  -- Set to readonly after writing
   vim.api.nvim_buf_set_option(state.expanded_buf, 'modifiable', false)
 
   return state.expanded_buf
@@ -381,12 +381,12 @@ local function open_miniature_window(buf, win, miniature_buf)
   -- Add keybindings for the miniature window
   local opts = { noremap = true, silent = true, buffer = miniature_buf }
   vim.keymap.set('n', '<Leader>i', function()
-    -- 使用主窗口的 buffer，不是 miniature 窗口的 buffer
+    -- Use main window buffer, not miniature window buffer
     local main_buf = nil
     for _, win_id in ipairs(vim.api.nvim_list_wins()) do
       local buf_id = vim.api.nvim_win_get_buf(win_id)
       local buf_name = vim.api.nvim_buf_get_name(buf_id)
-      -- 找到编辑的 .k 文件，而不是 nofile buffer
+      -- Find the edited .k file, not nofile buffer
       if buf_name:match('%.k$') or buf_name:match('%.key$') then
         main_buf = buf_id
         break
@@ -437,7 +437,7 @@ local function open_expanded_window(buf, win, expanded_buf)
   -- Add keybindings for the expanded window
   local opts = { noremap = true, silent = true, buffer = expanded_buf }
   vim.keymap.set('n', '<Leader>i', function()
-    -- 使用主窗口的 buffer
+    -- Use main window buffer
     local main_buf = nil
     for _, win_id in ipairs(vim.api.nvim_list_wins()) do
       local buf_id = vim.api.nvim_win_get_buf(win_id)

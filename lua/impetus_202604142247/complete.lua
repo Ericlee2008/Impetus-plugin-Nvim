@@ -44,8 +44,8 @@ end
 local function rank_filter(candidates, raw_base, normalize_candidate, normalize_base)
   local out = {}
   local base = normalize_base(raw_base or "")
-  -- 【诊断】禁用调试消息
-  -- vim.notify(string.format("[RANK_FILTER] 开始 | 候选数:%d | raw_base:'%s' | 归一化base:'%s'",
+  -- [Diagnostic] Disable debug messages
+  -- vim.notify(string.format("[RANK_FILTER] start | candidates:%d | raw_base:'%s' | normalized_base:'%s'",
   --   #candidates, raw_base or "", base), vim.log.levels.WARN)
   if base == "" then
     local copied = vim.deepcopy(candidates)
@@ -56,7 +56,7 @@ local function rank_filter(candidates, raw_base, normalize_candidate, normalize_
   for _, c in ipairs(candidates) do
     local key = normalize_candidate(c)
 
-    -- 【改进】tier 1: 严格前缀匹配（BC开头）
+    -- [Improvement] tier 1: strict prefix match (BC at start)
     local start_pos = key:find(base, 1, true)
     if start_pos == 1 then
       out[#out + 1] = {
@@ -66,7 +66,7 @@ local function rank_filter(candidates, raw_base, normalize_candidate, normalize_
         key = key,
       }
     elseif start_pos then
-      -- 【改进】tier 2: 包含匹配（BC在中间，比如 *ABCNODE）
+      -- [Improvement] tier 2: contains match (BC in middle, e.g. *ABCNODE)
       out[#out + 1] = {
         item = c,
         tier = 2,
@@ -75,15 +75,15 @@ local function rank_filter(candidates, raw_base, normalize_candidate, normalize_
         key = key,
       }
     else
-      -- 【改进】tier 3+: 模糊匹配，根据匹配的紧凑程度分tier
-      -- B*C (相邻) -> tier=3, B**C -> tier=4, B***C -> tier=5
+      -- [Improvement] tier 3+: fuzzy match, tiered by match compactness
+      -- B*C (adjacent) -> tier=3, B**C -> tier=4, B***C -> tier=5
       local first_pos, span = subseq_match(key, base)
       if first_pos then
-        -- 根据span（B和C之间的距离）来分tier
-        -- span越小（匹配越紧凑）tier越小（优先级越高）
-        local distance = span - #base  -- B和C之间相隔的字符数
-        local fuzzy_tier = 3 + math.floor(distance / 2)  -- 每2个间隔增加1个tier
-        fuzzy_tier = math.min(fuzzy_tier, 6)  -- 限制最高tier为6
+        -- Tier by span (distance between B and C)
+        -- Smaller span (more compact match) -> smaller tier (higher priority)
+        local distance = span - #base  -- Number of chars between B and C
+        local fuzzy_tier = 3 + math.floor(distance / 2)  -- Increase 1 tier per 2 gaps
+        fuzzy_tier = math.min(fuzzy_tier, 6)  -- Limit max tier to 6
 
         out[#out + 1] = {
           item = c,
@@ -95,13 +95,13 @@ local function rank_filter(candidates, raw_base, normalize_candidate, normalize_
     end
   end
 
-  -- 【诊断】排序前的统计
+  -- [Diagnostic] Statistics before sorting
   local tier_count = {}
   for _, r in ipairs(out) do
     tier_count[r.tier] = (tier_count[r.tier] or 0) + 1
   end
-  -- 【诊断】禁用调试消息
-  -- vim.notify(string.format("[FILTER] 过滤后 | 总数:%d | tier分布:%s",
+  -- [Diagnostic] Disable debug messages
+  -- vim.notify(string.format("[FILTER] after filter | total:%d | tier_dist:%s",
   --   #out, vim.inspect(tier_count)), vim.log.levels.WARN)
 
   table.sort(out, function(a, b)
@@ -109,7 +109,7 @@ local function rank_filter(candidates, raw_base, normalize_candidate, normalize_
       return a.tier < b.tier
     end
     if a.span ~= b.span then
-      return a.span < b.span  -- 匹配跨度小的优先（更紧凑）
+      return a.span < b.span  -- Smaller match span prioritized (more compact)
     end
     if a.key ~= b.key then
       return a.key < b.key
@@ -122,7 +122,7 @@ local function rank_filter(candidates, raw_base, normalize_candidate, normalize_
     items[#items + 1] = r.item
   end
 
-  -- 【调试】显示排序结果，验证改动是否生效
+  -- [Debug] Show sorting results, verify changes take effect
   if #items > 0 and base ~= "" then
     local first_tier = out[1].tier or "?"
     local first_item = out[1].item or "?"
@@ -130,9 +130,9 @@ local function rank_filter(candidates, raw_base, normalize_candidate, normalize_
     for i = 1, math.min(5, #items) do
       first_five[i] = items[i]
     end
-    -- 【诊断】禁用调试消息
-    -- vim.notify(string.format("[RANK_RESULT] 输入:'%s' | 第1个:%s(tier:%s) | 前5个:%s",
-    --   base, first_item, first_tier, table.concat(first_five, " → ")), vim.log.levels.WARN)
+    -- [Diagnostic] Disable debug messages
+    -- vim.notify(string.format("[RANK_RESULT] input:'%s' | 1st:%s(tier:%s) | top5:%s",
+    --   base, first_item, first_tier, table.concat(first_five, " -> ")), vim.log.levels.WARN)
   end
 
   return items
@@ -180,15 +180,15 @@ function M.complete(base)
   local items = {}
   local db = store.get_db()
 
-  -- 【诊断】输入的base值 - 已禁用
+  -- [Diagnostic] Input base value - disabled
   -- if base ~= "" then
-  --   vim.notify(string.format("[COMPLETE] 输入base:'%s'", base), vim.log.levels.WARN)
+  --   vim.notify(string.format("[COMPLETE] input base:'%s'", base), vim.log.levels.WARN)
   -- end
 
   if base:sub(1, 1) == "*" then
     local keywords = store.list_keywords()
-    -- 【诊断】禁用调试消息
-    -- vim.notify(string.format("[COMPLETE] 关键字完成 | 候选数:%d | base:'%s'",
+    -- [Diagnostic] Disable debug messages
+    -- vim.notify(string.format("[COMPLETE] keyword completion | candidates:%d | base:'%s'",
     --   #keywords, base), vim.log.levels.WARN)
     return rank_filter(
       keywords,
@@ -241,9 +241,9 @@ function M.complete(base)
 end
 
 function M.omnifunc(findstart, base)
-  -- 【诊断】如果这个错误出现，说明 omnifunc 被调用了
+  -- [Diagnostic] If this error appears, omnifunc was called
   if findstart ~= 1 then
-    error(string.format("DEBUG: omnifunc被调用了! base='%s'", base))
+    error(string.format("DEBUG: omnifunc called! base='%s'", base))
   end
 
   if findstart == 1 then
@@ -259,8 +259,8 @@ function M.omnifunc(findstart, base)
     end
     return col
   end
-  -- 【诊断】omnifunc被调用了
-  vim.notify(string.format("[OMNIFUNC] 调用 | findstart:%d | base:'%s'",
+  -- [Diagnostic] omnifunc called
+  vim.notify(string.format("[OMNIFUNC] called | findstart:%d | base:'%s'",
     findstart, base), vim.log.levels.WARN)
   local ok, result = pcall(M.complete, base)
   if not ok then

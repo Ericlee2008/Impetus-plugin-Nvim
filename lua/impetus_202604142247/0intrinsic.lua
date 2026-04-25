@@ -124,11 +124,11 @@ function M.apply_syntax_for_current_buffer()
     vim.cmd("silent! syntax keyword impetusIntrinsicSymbol " .. table.concat(sym_words, " "))
   end
   if #sym_ops > 0 then
-    -- 直接用 Vim 命令执行，避免 Lua 字符串转义问题
-    -- 按照 sym_ops 的顺序构建正则表达式
+    -- Execute directly with Vim command to avoid Lua string escaping issues
+    -- Build regex pattern in sym_ops order
     local pattern_parts = {}
     for _, op in ipairs(sym_ops) do
-      -- 在 Vim 正则中，这些字符需要转义：\ ^ $ * + . ? [ ] { } ( ) |
+      -- In Vim regex, these chars need escaping: \ ^ $ * + . ? [ ] { } ( ) |
       local escaped = op:gsub("([\\^$*+.?\\[\\]{}()|])", "\\%1")
       table.insert(pattern_parts, escaped)
     end
@@ -137,7 +137,7 @@ function M.apply_syntax_for_current_buffer()
     vim.notify("DEBUG: sym_ops = " .. vim.inspect(sym_ops), vim.log.levels.INFO)
     vim.notify("DEBUG: pattern = " .. pattern, vim.log.levels.INFO)
 
-    -- 使用原始字符串或 vim.schedule 来避免转义问题
+    -- Use raw string or vim.schedule to avoid escaping issues
     vim.schedule(function()
       vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\m\\%(" .. pattern .. "\\)/")
     end)

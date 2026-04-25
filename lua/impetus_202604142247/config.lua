@@ -14,13 +14,13 @@ local defaults = {
   dev_hot_reload = true,
   dev_mode = false,
 
-  -- Info Window v2 configuration (新设计)
-  use_info_v2 = false,              -- 使用新版本 Info 窗口 (默认关闭)
-  info_v2_mode = 'miniature',       -- 启动模式: 'miniature' | 'expanded'
-  info_v2_expand_key = '<Leader>i', -- 展开/收起快捷键
-  info_v2_miniature_height = 1,     -- 迷你模式高度
-  info_v2_expanded_height = 20,     -- 展开模式高度
-  info_v2_expanded_width = 120,     -- 展开模式宽度
+  -- Info Window v2 configuration (new design)
+  use_info_v2 = false,              -- Use new version Info window (default off)
+  info_v2_mode = 'miniature',       -- Launch mode: 'miniature' | 'expanded'
+  info_v2_expand_key = '<Leader>i', -- Expand/collapse shortcut key
+  info_v2_miniature_height = 1,     -- Miniature mode height
+  info_v2_expanded_height = 20,     -- Expanded mode height
+  info_v2_expanded_width = 120,     -- Expanded mode width
 }
 
 local state = {

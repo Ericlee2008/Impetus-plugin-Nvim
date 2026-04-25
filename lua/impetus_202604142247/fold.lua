@@ -1,9 +1,9 @@
 local M = {}
 
--- 【性能优化】禁用 fold 缓存重建
--- 原因：使用 foldmethod=manual，不需要自动 fold 计算
--- 打开 50 万行文件时，缓存重建耗时 1195+ ms
--- 禁用后，打开文件速度立即响应
+-- [Performance] Disable fold cache rebuild
+-- Reason: using foldmethod=manual, no automatic fold calculation needed
+-- When opening 500k-line files, cache rebuild takes 1195+ ms
+-- After disabling, file open speed is immediately responsive
 
 local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -34,9 +34,9 @@ local function classify(line)
 end
 
 function M.foldexpr(lnum)
-  -- 【禁用】完全禁用 fold expression 缓存重建
-  -- 原因：foldmethod=manual 时不需要自动计算
-  -- 如果以后需要启用 fold expression，可以恢复这个实现
+  -- [Disabled] Completely disable fold expression cache rebuild
+  -- Reason: no automatic calculation needed when foldmethod=manual
+  -- If fold expression is needed later, this implementation can be restored
   return "="
 end
 
@@ -47,20 +47,20 @@ function M.foldtext()
   local content = first:sub(#indent + 1)
   local hidden = math.max(0, vim.v.foldend - vim.v.foldstart)
 
-  -- 【样式改进】新的折叠格式：+ Keyword....................................n lines
-  -- "n lines" 始终靠右显示
+  -- [Style] New fold format: + Keyword....................................n lines
+  -- "n lines" always aligned to the right
   local line_count_str = string.format("%d lines", hidden)
   local prefix = indent .. "+ " .. content
 
-  -- 获取窗口宽度
+  -- Get window width
   local winwidth = vim.api.nvim_win_get_width(0)
 
-  -- 计算可用宽度：窗口宽度 - 前缀宽度 - "n lines" 宽度 - 1个空格
+  -- Calculate available width: window width - prefix width - "n lines" width - 1 space
   local prefix_width = vim.fn.strdisplaywidth(prefix)
-  local suffix_width = vim.fn.strdisplaywidth(line_count_str) + 1  -- +1 为前面的空格
+  local suffix_width = vim.fn.strdisplaywidth(line_count_str) + 1  -- +1 for the leading space
   local available_width = winwidth - prefix_width - suffix_width
 
-  -- 计算点号数量（至少 1 个）
+  -- Calculate dot count (at least 1)
   local dot_count = math.max(1, available_width)
   local dots = string.rep(".", dot_count)
 

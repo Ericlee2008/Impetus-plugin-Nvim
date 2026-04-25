@@ -39,7 +39,7 @@ local function ensure_blink_sort_for_impetus()
     return
   end
   -- Force deterministic order for Impetus completion items.
-  -- 【改进】同时配置 sources 以启用 impetus_kw
+  -- [Improvement] Also configure sources to enable impetus_kw
   pcall(blink.setup, {
     fuzzy = {
       sorts = { "sort_text", "label" },
@@ -595,8 +595,8 @@ local function setup_filetype_behaviors()
     end
     ensure_impetus_syntax(buf)
     highlight.apply()
-    -- ⚡ 性能优化：只在第一次加载时应用syntax规则
-    -- 之前每次BufEnter都会重置标记，导致撤销操作延迟2+秒（O(n²)复杂度）
+    -- ⚡ Performance: only apply syntax rules on first load
+    -- Previously every BufEnter reset marks, causing 2+ sec undo delay (O(n²) complexity)
     if vim.b[buf].impetus_intrinsic_applied ~= 1 then
       intrinsic.apply_syntax_for_current_buffer(buf)
     end
@@ -715,8 +715,8 @@ local function setup_filetype_behaviors()
     ensure_blink_sort_for_impetus()
     if not already_attached then
       refresh_main_visuals(buf)
-      -- 【性能优化】延迟加载 side_help，避免打开文件时 buf_get_lines 224ms 延迟
-      -- 改为在用户首次移动光标时初始化
+      -- [Performance] Lazy-load side_help, avoid 224ms buf_get_lines delay when opening files
+      -- Changed to initialize on user's first cursor movement
       if config.get().side_help_track then
         vim.schedule(function()
           if vim.api.nvim_buf_is_valid(buf) then
@@ -724,7 +724,7 @@ local function setup_filetype_behaviors()
           end
         end)
       end
-      -- 【性能优化】延迟加载 focus_first_keyword_once，避免打开文件时 buf_get_lines 延迟
+      -- [Performance] Lazy-load focus_first_keyword_once, avoid buf_get_lines delay when opening files
       if vim.b[buf].impetus_child_buffer ~= 1 then
         vim.schedule(function()
           if vim.api.nvim_buf_is_valid(buf) then
@@ -987,7 +987,7 @@ function M.setup(opts)
     side_help.setup()
   end
 
-  -- 选择使用 info 或 info_v2
+  -- Choose between info or info_v2
   if config.get().use_info_v2 then
     info_v2.setup()
   else

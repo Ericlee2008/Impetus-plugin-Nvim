@@ -264,6 +264,10 @@ local function generic_enum_for_name(name)
   return nil
 end
 
+function M.generic_enum_for_name(name)
+  return generic_enum_for_name(name)
+end
+
 local function validate_field_by_name(param_name, value)
   local n = normalize_param_name(param_name)
   local v = trim(value or "")

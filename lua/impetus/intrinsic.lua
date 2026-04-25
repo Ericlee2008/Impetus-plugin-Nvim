@@ -21,8 +21,11 @@ local function resolve_file()
   if buf_path and buf_path ~= "" then
     local buf_dir = vim.fn.fnamemodify(buf_path, ":p:h")
     local found = vim.fn.findfile("intrinsic.k", buf_dir .. ";")
-    if readable(found) then
-      return vim.fn.fnamemodify(found, ":p")
+    if found and found ~= "" then
+      local abs = vim.fn.fnamemodify(found, ":p")
+      if readable(abs) then
+        return abs
+      end
     end
   end
 
@@ -36,7 +39,7 @@ local function resolve_file()
   local this_file = src:gsub("^@", "")
   if this_file ~= "" then
     local plugin_root = vim.fn.fnamemodify(this_file, ":p:h:h:h")
-    local sibling = vim.fn.fnamemodify(plugin_root .. "/../intrinsic.k", ":p")
+    local sibling = vim.fn.fnamemodify(plugin_root .. "/intrinsic.k", ":p")
     if readable(sibling) then
       return sibling
     end

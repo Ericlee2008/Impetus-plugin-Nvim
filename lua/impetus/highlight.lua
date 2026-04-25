@@ -20,7 +20,7 @@ local palette = {
   default = "#00c86f",
   field = "#ffffff",
   intrinsic_func = "#00a35a",
-  intrinsic_var = "#00a35a",
+  intrinsic_var = "#e5c07b",
   intrinsic_symbol = "#00a35a",
   divider = "#d7d7d7",
   example = "#c0c0c0",
@@ -115,6 +115,10 @@ function M.apply()
   hi("ImpetusFileTreeHover", { fg = palette.info_file, bg = "#2a4a7a", bold = true })
   hi("ImpetusFileTreeArrow", { fg = "#ff3030", bold = true })
   hi("ImpetusInfoSelected", { bg = "#ffff00", fg = "#000000", bold = true })
+
+  -- Lint diagnostic colors: yellow for ERROR, cyan for WARNING (high visibility)
+  hi("DiagnosticError", { fg = "#ffd166" })
+  hi("DiagnosticWarn", { fg = "#00d7ff" })
 end
 
 return M

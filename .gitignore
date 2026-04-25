@@ -1,0 +1,6 @@
+# Logs
+impetus_nvim.log
+
+# Temporary / generated
+_fix_pattern.py
+_test_pattern.lua

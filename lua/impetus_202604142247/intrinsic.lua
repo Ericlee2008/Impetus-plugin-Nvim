@@ -75,13 +75,13 @@ local function parse()
           local name = lhs:match("^([%a_][%w_]*)")
           add_unique(vars, seen_v, name)
         elseif mode == "symbol" then
-          -- 检查是否是运算符（由 +,-,*,/,^,&,|,!,=,<,> 组成）
-          -- 注意：- 需要在末尾以避免被解释为范围
+          -- Check if operator (composed of +,-,*,/,^,&,|,!,=,<,>)
+          -- Note: - must be at end to avoid being interpreted as range
           local op = lhs:match("^[+*/%^&|!=<>-]+$")
           if op then
             add_unique(sym_ops, seen_so, op)
           else
-            -- 否则作为符号单词
+            -- Otherwise treat as symbol word
             local word = lhs:match("^([%a_][%w_]*)")
             add_unique(sym_words, seen_sw, word)
           end
@@ -104,7 +104,7 @@ local function parse()
 end
 
 function M.apply_syntax_for_current_buffer(buf)
-  -- 注意：忽略传入的 buf 参数，总是在当前缓冲区执行
+  -- Note: ignore passed buf arg, always execute in current buffer
   local ft = vim.bo.filetype
 
   if ft ~= "impetus" and ft ~= "kwt" then
@@ -119,15 +119,15 @@ function M.apply_syntax_for_current_buffer(buf)
     return
   end
 
-  -- 【关键修复】延迟执行所有 syntax 命令到 vim.schedule()
-  -- 这样可以避免在 Syntax autocmd 上下文中的问题
+  -- [Critical Fix] Defer all syntax commands to vim.schedule()
+  -- This avoids issues in Syntax autocmd context
   vim.schedule(function()
-    -- 高亮函数
+    -- Highlight functions
     if #d.funcs > 0 then
       pcall(vim.cmd, "syntax keyword impetusIntrinsicFunction " .. table.concat(d.funcs, " "))
     end
 
-    -- 高亮变量
+    -- Highlight variables
     if #d.vars > 0 then
       pcall(vim.cmd, "syntax keyword impetusIntrinsicVariable " .. table.concat(d.vars, " "))
     end
@@ -136,12 +136,12 @@ function M.apply_syntax_for_current_buffer(buf)
     local sym_words = symbols.words or {}
     local sym_ops = symbols.ops or {}
 
-    -- 高亮符号单词
+    -- Highlight symbol words
     if #sym_words > 0 then
       pcall(vim.cmd, "syntax keyword impetusIntrinsicSymbol " .. table.concat(sym_words, " "))
     end
 
-    -- 高亮运算符
+    -- Highlight operators
     if #sym_ops > 0 then
       for _, op in ipairs(sym_ops) do
         if op == "*" then

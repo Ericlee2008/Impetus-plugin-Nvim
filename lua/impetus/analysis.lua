@@ -11,6 +11,15 @@ local function strip_number_prefix(line)
   return (line:gsub("^%s*%d+%.%s*", ""))
 end
 
+local function file_mtime(path)
+  local ok, stat = pcall(vim.loop.fs_stat, path)
+  if ok and stat and stat.mtime then
+    return string.format("%d:%d", stat.mtime.sec or 0, stat.mtime.nsec or 0)
+  end
+  local t = vim.fn.getftime(path)
+  return tostring(t or -1)
+end
+
 local function parse_keyword(line)
   local normalized = trim(strip_number_prefix(line or ""))
   return normalized:match("^(%*[%w_%-]+)")
@@ -109,7 +118,7 @@ local function classify_def_type(keyword, param_name)
   local p = normalize_param_name(param_name)
   local k = (keyword or ""):upper()
   -- Only *PART/* keywords define parts
-  if k:match("^%*PART") and (p == "id" or p == "typeid" or p:match("^pid") or p == "partid" or p == "part_id") then
+  if k:match("^%*PART") and (p == "id" or p == "typeid" or p == "pid" or p:match("^pid_%d+$") or p == "partid" or p == "part_id") then
     return "part"
   end
   -- Only *MAT_* keywords define materials
@@ -154,16 +163,19 @@ local function classify_ref_type(keyword, param_name)
       return "part"
     end
   end
-  if p:match("^pid") or p == "partid" or p == "part_id" then
+  if p == "pid" or p:match("^pid_%d+$") or p == "partid" or p == "part_id" then
     return "part"
   end
-  if p:match("^mid") then
+  if p == "mid" or p:match("^mid_%d+$") then
     return "material"
   end
-  if p:match("^fid") or p:match("^cid") then
-    return "curve"
+  if p == "fid" or p == "cid" or p:match("^fid_%d+$") or p:match("^cid_%d+$") then
+    -- *CURVE/*FUNCTION define curves via these fields; do not treat as references
+    if k ~= "*CURVE" and k ~= "*FUNCTION" then
+      return "curve"
+    end
   end
-  if p:match("^gid") then
+  if p == "gid" or p:match("^gid_%d+$") then
     return "geometry"
   end
   if p == "did" then
@@ -300,16 +312,12 @@ local function field_index_from_col(line, col1)
   return nil
 end
 
-local function bc_motion_omits_bcid(data_rows, lines)
+local function first_data_row_is_nonnumeric(data_rows, lines)
   local first_row = data_rows and data_rows[1]
-  if not first_row then
-    return false
-  end
+  if not first_row then return false end
   local values = split_csv_outside_quotes(lines[first_row] or "")
   local first = trim(values[1] or "")
-  if first == "" or first:match('^".*"$') then
-    return false
-  end
+  if first == "" or first:match('^".*"$') then return false end
   return not (
     first:match("^[+-]?%d+$")
     or first:match("^[+-]?%d+%.0+$")
@@ -318,10 +326,20 @@ local function bc_motion_omits_bcid(data_rows, lines)
   )
 end
 
-local function schema_row_for_context(keyword, data_rows, lines, data_row_index)
-  local kw = (keyword or ""):upper()
-  if kw == "*BC_MOTION" and bc_motion_omits_bcid(data_rows, lines) then
-    return data_row_index + 1
+-- Generic: for keywords whose schema row 1 is a single optional ID (coid/bcid),
+-- detect whether that row was omitted (first data row starts with non-numeric content).
+local function schema_row_for_context(keyword, entry, data_rows, lines, data_row_index)
+  if not first_data_row_is_nonnumeric(data_rows, lines) then
+    return data_row_index
+  end
+  -- Only offset when row 1 schema is a single field (the optional ID row)
+  local sig = entry and entry.signature_rows
+  if sig and sig[1] and #sig[1] == 1 and #sig >= 2 then
+    local first_param = sig[1][1] or ""
+    local is_id_like = first_param:match("^%d+$") or first_param:match("^[%a_]*[iI][dD]$")
+    if is_id_like then
+      return data_row_index + 1
+    end
   end
   return data_row_index
 end
@@ -349,9 +367,7 @@ local function build_params_from_lines(lines)
   return params
 end
 
-local function collect_include_paths(bufnr, lines)
-  local buf_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":p")
-  local dir = vim.fn.fnamemodify(buf_file, ":h")
+local function collect_include_paths_from_lines(lines, base_dir)
   local paths = {}
   local seen = {}
   local in_include = false
@@ -365,7 +381,7 @@ local function collect_include_paths(bufnr, lines)
         local path = t:match('"(.-)"') or trim(t:match("^([^,]+)") or "")
         if path and path ~= "" then
           if not path:match("^[A-Za-z]:") and not path:match("^[/\\]") then
-            path = dir .. "/" .. path
+            path = base_dir .. "/" .. path
           end
           local abs = vim.fn.fnamemodify(path, ":p")
           if not seen[abs] then
@@ -380,36 +396,188 @@ local function collect_include_paths(bufnr, lines)
   return paths
 end
 
+local function collect_include_paths(bufnr, lines)
+  local buf_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":p")
+  local dir = vim.fn.fnamemodify(buf_file, ":h")
+  return collect_include_paths_from_lines(lines, dir)
+end
+
+-- Parse object defs/refs from a single keyword block.
+-- Returns { objects = {}, object_defs = {}, object_refs = {} }
+local function parse_block_objects(lines, block, db)
+  local result = {
+    objects = {},
+    object_defs = {},
+    object_refs = {},
+  }
+  local entry = db[block.keyword]
+  local data_rows = collect_data_rows(lines, block)
+  local kw_upper = (block.keyword or ""):upper()
+  for row_idx, row in ipairs(data_rows) do
+    local values = split_csv_outside_quotes(lines[row] or "")
+    local schema_row_idx = schema_row_for_context(block.keyword, entry, data_rows, lines, row_idx)
+    local schema = (entry and entry.signature_rows and (entry.signature_rows[schema_row_idx] or entry.signature_rows[#entry.signature_rows])) or {}
+    local raw_line = lines[row] or ""
+    local function store_def(t, idv, col)
+      if not t or not idv then return end
+      if not result.objects[t] then result.objects[t] = {} end
+      if not result.object_defs[t] then result.object_defs[t] = {} end
+      result.objects[t][idv] = true
+      if not result.object_defs[t][idv] then
+        result.object_defs[t][idv] = { row = row, col = col or 0, keyword = block.keyword, line = raw_line }
+      end
+    end
+    local function store_ref(t, idv, col)
+      if not t or not idv then return end
+      if idv == "0" or idv == 0 then return end
+      if not result.object_refs[t] then result.object_refs[t] = {} end
+      result.object_refs[t][idv] = result.object_refs[t][idv] or {}
+      local list = result.object_refs[t][idv]
+      list[#list + 1] = { row = row, col = col or 0, keyword = block.keyword, line = raw_line }
+    end
+    -- Hardcoded definitions
+    if kw_upper == "*PART" and row_idx == 1 then
+      store_def("part", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
+    end
+    if kw_upper:match("^%*SET_") and row_idx == 1 then
+      local set_t = "set"
+      if kw_upper:match("^%*SET_PART") then set_t = "part_set"
+      elseif kw_upper:match("^%*SET_NODE") then set_t = "node_set"
+      elseif kw_upper:match("^%*SET_ELEMENT") then set_t = "element_set"
+      elseif kw_upper:match("^%*SET_GEOMETRY") then set_t = "geometry_set"
+      elseif kw_upper:match("^%*SET_FACE") then set_t = "face_set"
+      end
+      store_def(set_t, value_as_id(values[1]), field_col_from_idx(raw_line, 1))
+    end
+    if (kw_upper == "*CURVE" or kw_upper == "*FUNCTION") and row_idx == 1 then
+      store_def("curve", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
+    end
+    if kw_upper == "*PROP_DAMAGE_CL" and row_idx == 1 then
+      store_def("prop_damage", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
+    end
+    if kw_upper == "*PROP_THERMAL" and row_idx == 1 then
+      store_def("prop_thermal", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
+    end
+    if kw_upper:match("^%*EOS") and row_idx == 1 then
+      store_def("eos", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
+    end
+    -- *MAT_OBJECT: optional title is skipped by collect_data_rows (is_meta_line),
+    -- so row_idx=1 is always the material data row.  Material ID lives at field 2
+    -- (field 1 is typically empty or a non-numeric object name).
+    if kw_upper == "*MAT_OBJECT" and row_idx == 1 then
+      store_def("material", value_as_id(values[2]), field_col_from_idx(raw_line, 2))
+    end
+    -- Schema-driven: collect defs and refs from param names
+    for field_idx, value in ipairs(values) do
+      local param_name = schema[field_idx]
+      if param_name then
+        local idv = value_as_id(value)
+        if idv then
+          local def_t = classify_def_type(block.keyword, param_name)
+          if def_t then store_def(def_t, idv, field_col_from_idx(raw_line, field_idx)) end
+          local ref_t = classify_ref_type(block.keyword, param_name)
+          -- For enid* fields (or numeric-literal schema params), derive type from
+          -- the preceding entype field's value
+          local pnorm = normalize_param_name(param_name)
+          if not ref_t and (pnorm:match("^enid") or pnorm:match("^%d+$")) then
+            for i = field_idx - 1, 1, -1 do
+              local v = trim(values[i] or ""):upper()
+              local t = entype_to_obj_type[v]
+              if t then ref_t = t; break end
+              if v ~= "" then break end
+            end
+          end
+          if ref_t then store_ref(ref_t, idv, field_col_from_idx(raw_line, field_idx)) end
+        end
+        -- Treat fcn(id) / crv(id) values as curve references
+        local tv = trim(value)
+        local fcn_id = tv:match("^fcn%s*%(%s*(%d+)%s*%)")
+        if fcn_id then
+          store_ref("curve", fcn_id, field_col_from_idx(raw_line, field_idx))
+        end
+        local crv_id = tv:match("^crv%s*%(%s*(%d+)%s*%)")
+        if crv_id then
+          store_ref("curve", crv_id, field_col_from_idx(raw_line, field_idx))
+        end
+      end
+    end
+  end
+  return result
+end
+
+-- Lightweight block hash for incremental indexing.
+local function hash_block(lines, block)
+  -- Use sha256 if available, otherwise fall back to raw concat.
+  local content = table.concat(lines, "\n", block.start_row, block.end_row)
+  local ok, hash = pcall(vim.fn.sha256, content)
+  if ok and hash then
+    return hash
+  end
+  return content
+end
+
+-- Merge a single block's object results into the global index.
+local function merge_block_result(idx, result)
+  for t, ids in pairs(result.objects or {}) do
+    idx.objects[t] = idx.objects[t] or {}
+    for idv, _ in pairs(ids) do
+      idx.objects[t][idv] = true
+    end
+  end
+  for t, defs in pairs(result.object_defs or {}) do
+    idx.object_defs[t] = idx.object_defs[t] or {}
+    for idv, info in pairs(defs) do
+      if not idx.object_defs[t][idv] then
+        idx.object_defs[t][idv] = info
+      end
+    end
+  end
+  for t, refs in pairs(result.object_refs or {}) do
+    idx.object_refs[t] = idx.object_refs[t] or {}
+    for idv, list in pairs(refs) do
+      local target = idx.object_refs[t][idv] or {}
+      for _, item in ipairs(list) do
+        target[#target + 1] = item
+      end
+      idx.object_refs[t][idv] = target
+    end
+  end
+end
+
 function M.build_buffer_index(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local cached = index_cache[bufnr]
+
   if cached and cached.changedtick == changedtick and cached.index then
     return cached.index
   end
 
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local db = store.get_db()
 
+  -- ------------------------------------------------------------------
+  -- Part A: global param scan (always full-scan; cheap)
+  -- ------------------------------------------------------------------
   local idx = {
-    params = {
-      defs = {},
-      refs = {},
-    },
+    params = { defs = {}, refs = {} },
     objects = {
       part = {}, material = {}, ["function"] = {}, geometry = {}, command = {}, curve = {},
       part_set = {}, node_set = {}, element_set = {}, geometry_set = {}, face_set = {}, set = {},
       prop_damage = {}, prop_thermal = {}, eos = {},
+      node = {}, element = {},
     },
     object_defs = {
       part = {}, material = {}, ["function"] = {}, geometry = {}, command = {}, curve = {},
       part_set = {}, node_set = {}, element_set = {}, geometry_set = {}, face_set = {}, set = {},
       prop_damage = {}, prop_thermal = {}, eos = {},
+      node = {}, element = {},
     },
     object_refs = {
       part = {}, material = {}, ["function"] = {}, geometry = {}, command = {}, curve = {},
       part_set = {}, node_set = {}, element_set = {}, geometry_set = {}, face_set = {}, set = {},
       prop_damage = {}, prop_thermal = {}, eos = {},
+      node = {}, element = {},
     },
     keywords = {},
   }
@@ -433,77 +601,33 @@ function M.build_buffer_index(bufnr)
     end
   end
 
+  -- ------------------------------------------------------------------
+  -- Part B: block-level object parsing (incremental when possible)
+  -- ------------------------------------------------------------------
+  local block_cache = cached and cached.block_cache or {}
+  local new_block_cache = {}
+  local can_incremental = cached
+    and cached.block_cache
+    and cached.line_count == #lines
+
   for i = 1, #lines do
     local block = find_keyword_block(lines, i)
     if block and block.start_row == i then
-      local entry = db[block.keyword]
-      local data_rows = collect_data_rows(lines, block)
-      local kw_upper = (block.keyword or ""):upper()
-      for row_idx, row in ipairs(data_rows) do
-        local values = split_csv_outside_quotes(lines[row] or "")
-        local schema = (entry and entry.signature_rows and (entry.signature_rows[row_idx] or entry.signature_rows[#entry.signature_rows])) or {}
-        local raw_line = lines[row] or ""
-        local function store_def(t, idv, col)
-          if not t or not idv then return end
-          idx.objects[t][idv] = true
-          if not idx.object_defs[t][idv] then
-            idx.object_defs[t][idv] = { row = row, col = col or 0, keyword = block.keyword, line = raw_line }
-          end
-        end
-        local function store_ref(t, idv, col)
-          if not t or not idv then return end
-          idx.object_refs[t][idv] = idx.object_refs[t][idv] or {}
-          local list = idx.object_refs[t][idv]
-          list[#list + 1] = { row = row, col = col or 0, keyword = block.keyword, line = raw_line }
-        end
-        -- Hardcoded definitions
-        if kw_upper == "*PART" and row_idx == 1 then
-          store_def("part", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
-        end
-        if kw_upper:match("^%*SET_") and row_idx == 1 then
-          local set_t = "set"
-          if kw_upper:match("^%*SET_PART") then set_t = "part_set"
-          elseif kw_upper:match("^%*SET_NODE") then set_t = "node_set"
-          elseif kw_upper:match("^%*SET_ELEMENT") then set_t = "element_set"
-          elseif kw_upper:match("^%*SET_GEOMETRY") then set_t = "geometry_set"
-          elseif kw_upper:match("^%*SET_FACE") then set_t = "face_set"
-          end
-          store_def(set_t, value_as_id(values[1]), field_col_from_idx(raw_line, 1))
-        end
-        if (kw_upper == "*CURVE" or kw_upper == "*FUNCTION") and row_idx == 1 then
-          store_def("curve", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
-        end
-        if kw_upper == "*PROP_DAMAGE_CL" and row_idx == 1 then
-          store_def("prop_damage", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
-        end
-        if kw_upper == "*PROP_THERMAL" and row_idx == 1 then
-          store_def("prop_thermal", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
-        end
-        if kw_upper:match("^%*EOS") and row_idx == 1 then
-          store_def("eos", value_as_id(values[1]), field_col_from_idx(raw_line, 1))
-        end
-        -- Schema-driven: collect defs and refs from param names
-        for field_idx, value in ipairs(values) do
-          local param_name = schema[field_idx]
-          if param_name then
-            local idv = value_as_id(value)
-            if idv then
-              local def_t = classify_def_type(block.keyword, param_name)
-              if def_t then store_def(def_t, idv, field_col_from_idx(raw_line, field_idx)) end
-              local ref_t = classify_ref_type(block.keyword, param_name)
-              -- For enid* fields, derive type from the preceding entype field's value
-              if not ref_t and normalize_param_name(param_name):match("^enid") then
-                for i = field_idx - 1, 1, -1 do
-                  local v = trim(values[i] or ""):upper()
-                  local t = entype_to_obj_type[v]
-                  if t then ref_t = t; break end
-                  if v ~= "" then break end
-                end
-              end
-              if ref_t then store_ref(ref_t, idv, field_col_from_idx(raw_line, field_idx)) end
-            end
-          end
-        end
+      local h = hash_block(lines, block)
+      local old_entry = block_cache[block.start_row]
+      if can_incremental and old_entry and old_entry.hash == h and old_entry.keyword == block.keyword then
+        -- Block unchanged: reuse cached result
+        new_block_cache[block.start_row] = old_entry
+        merge_block_result(idx, old_entry.result)
+      else
+        -- Block new or changed: re-parse
+        local result = parse_block_objects(lines, block, db)
+        new_block_cache[block.start_row] = {
+          hash = h,
+          keyword = block.keyword,
+          result = result,
+        }
+        merge_block_result(idx, result)
       end
       i = block.end_row
     end
@@ -511,7 +635,9 @@ function M.build_buffer_index(bufnr)
 
   index_cache[bufnr] = {
     changedtick = changedtick,
+    line_count = #lines,
     index = idx,
+    block_cache = new_block_cache,
   }
   return idx
 end
@@ -519,6 +645,152 @@ end
 function M.invalidate_buffer_index(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   index_cache[bufnr] = nil
+end
+
+function M.invalidate_cross_file_cache_for_path(path)
+  local abs = path and vim.fn.fnamemodify(path, ":p") or nil
+  if abs and abs ~= "" then
+    M._cross_file_object_cache[abs] = nil
+    M._cross_file_param_cache[abs] = nil
+  end
+end
+
+-- Build a cross-file parameter index that merges defs/refs from the current buffer
+-- and all recursively included files (plus any other open impetus/kwt buffers).
+function M.build_cross_file_param_index(bufnr)
+  bufnr = (bufnr == nil or bufnr == 0) and vim.api.nvim_get_current_buf() or bufnr
+  local all_defs = {}
+  local all_refs = {}
+  local searched = {}
+
+  local search_buf
+  local search_file
+
+  search_buf = function(bn)
+    if vim.b[bn].impetus_info_buffer == 1
+      or vim.b[bn].impetus_help_buffer == 1
+      or vim.b[bn].impetus_popup_buffer == 1
+    then
+      return
+    end
+    local bfile = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bn), ":p")
+    if searched[bfile] then return end
+    searched[bfile] = true
+    local bidx = M.build_buffer_index(bn)
+    for name, defs in pairs(bidx.params.defs) do
+      all_defs[name] = all_defs[name] or {}
+      for _, d in ipairs(defs) do
+        all_defs[name][#all_defs[name] + 1] = { row = d.row, col = d.col, line = d.line, file = bfile }
+      end
+    end
+    for name, refs in pairs(bidx.params.refs) do
+      all_refs[name] = all_refs[name] or {}
+      for _, r in ipairs(refs) do
+        all_refs[name][#all_refs[name] + 1] = { row = r.row, col = r.col, line = r.line, file = bfile }
+      end
+    end
+    local blines = vim.api.nvim_buf_get_lines(bn, 0, -1, false)
+    for _, path in ipairs(collect_include_paths(bn, blines)) do
+      search_file(path)
+    end
+  end
+
+  search_file = function(path)
+    local inc_bufnr = vim.fn.bufnr(path)
+    if inc_bufnr > 0 and vim.api.nvim_buf_is_loaded(inc_bufnr) then
+      search_buf(inc_bufnr)
+      return
+    end
+    if searched[path] then return end
+    searched[path] = true
+
+    -- Check cache before touching disk
+    local mtime = file_mtime(path)
+    local cached = M._cross_file_param_cache[path]
+    if cached and cached.mtime == mtime and cached.result then
+      local params = cached.result
+      for name, defs in pairs(params.defs or {}) do
+        all_defs[name] = all_defs[name] or {}
+        for _, d in ipairs(defs) do
+          all_defs[name][#all_defs[name] + 1] = d
+        end
+      end
+      for name, refs in pairs(params.refs or {}) do
+        all_refs[name] = all_refs[name] or {}
+        for _, r in ipairs(refs) do
+          all_refs[name][#all_refs[name] + 1] = r
+        end
+      end
+      -- Cache hit: recurse includes without re-reading the file
+      for _, p in ipairs(cached.includes or {}) do
+        search_file(p)
+      end
+      return
+    end
+
+    local ok, result = pcall(function()
+      local f = io.open(path, "r")
+      if not f then return nil end
+      local ls = {}
+      for l in f:lines() do ls[#ls + 1] = l end
+      f:close()
+      return ls
+    end)
+    local inc_lines = ok and result or nil
+    if not inc_lines then
+      return
+    end
+
+    local params = build_params_from_lines(inc_lines)
+    -- Annotate with file path before caching
+    for name, defs in pairs(params.defs) do
+      for _, d in ipairs(defs) do
+        d.file = path
+      end
+    end
+    for name, refs in pairs(params.refs) do
+      for _, r in ipairs(refs) do
+        r.file = path
+      end
+    end
+    local dir = vim.fn.fnamemodify(path, ":h")
+    local includes = collect_include_paths_from_lines(inc_lines, dir)
+    M._cross_file_param_cache[path] = { mtime = mtime, result = params, includes = includes }
+    for name, defs in pairs(params.defs) do
+      all_defs[name] = all_defs[name] or {}
+      for _, d in ipairs(defs) do
+        all_defs[name][#all_defs[name] + 1] = d
+      end
+    end
+    for name, refs in pairs(params.refs) do
+      all_refs[name] = all_refs[name] or {}
+      for _, r in ipairs(refs) do
+        all_refs[name][#all_refs[name] + 1] = r
+      end
+    end
+    for _, p in ipairs(includes) do
+      search_file(p)
+    end
+  end
+
+  search_buf(bufnr)
+
+  for _, bn in ipairs(vim.api.nvim_list_bufs()) do
+    if bn ~= bufnr and vim.api.nvim_buf_is_loaded(bn) then
+      local ft = vim.bo[bn].filetype
+      if ft == "impetus" or ft == "kwt" then
+        if vim.b[bn].impetus_info_buffer ~= 1
+          and vim.b[bn].impetus_help_buffer ~= 1
+          and vim.b[bn].impetus_popup_buffer ~= 1
+          and vim.b[bn].impetus_child_buffer ~= 1
+        then
+          search_buf(bn)
+        end
+      end
+    end
+  end
+
+  return { defs = all_defs, refs = all_refs }
 end
 
 function M.current_context(bufnr, row, col0)
@@ -569,7 +841,7 @@ function M.current_context(bufnr, row, col0)
     end
     return { keyword = block.keyword }
   end
-  local schema_row_idx = schema_row_for_context(block.keyword, data_rows, lines, row_idx)
+  local schema_row_idx = schema_row_for_context(block.keyword, entry, data_rows, lines, row_idx)
   local schema = entry.signature_rows and (entry.signature_rows[schema_row_idx] or entry.signature_rows[#entry.signature_rows]) or nil
   if not schema then
     return { keyword = block.keyword }
@@ -600,9 +872,11 @@ function M.suggest_object_values(bufnr, ctx, base)
     end
   end
   -- Entype-based fallback: only for anonymous fields or explicit enid_* fields
-  -- Skip if field has a named schema parameter (like bc_tr, bc_rot) that isn't an entity ID
+  -- Skip if field has a named schema parameter (like bc_tr, bc_rot) that isn't an entity ID.
+  -- Also allow when schema param name is a pure numeric literal (e.g. *ACTIVATE_ELEMENTS has
+  -- example data "1,P,3,..." as its schema instead of real param names).
   local pn = ctx.param_name and normalize_param_name(ctx.param_name) or nil
-  local is_enid_field = not pn or pn:match("^enid")
+  local is_enid_field = not pn or pn:match("^enid") or pn:match("^%d+$")
   if not obj_type and is_enid_field and ctx.field_idx and ctx.field_idx > 1 then
     local row = vim.api.nvim_win_get_cursor(0)[1]
     local line = (vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false) or {})[1] or ""
@@ -653,11 +927,78 @@ local function obj_type_for_def_keyword(kw)
   if k:match("^%*SET_FACE") then return "face_set" end
   if k:match("^%*SET_") then return "set" end
   if k:match("^%*MAT_") then return "material" end
+  if k:match("^%*GEOMETRY") then return "geometry" end
   if k == "*PROP_DAMAGE_CL" then return "prop_damage" end
   if k == "*PROP_THERMAL" then return "prop_thermal" end
   if k:match("^%*EOS") then return "eos" end
   return nil
 end
+
+-- Lightweight object-def scanner for disk files.
+-- ~10x faster than build_buffer_index because it skips parameter parsing,
+-- schema lookups, reference collection, and temp buffer creation.
+local function scan_object_defs_from_lines(lines, file_path)
+  local defs = {}
+  local current_kw = nil
+  local obj_type = nil
+  local data_row_count = 0
+
+  for i, raw in ipairs(lines or {}) do
+    local kw = parse_keyword(raw)
+    if kw then
+      current_kw = kw:upper()
+      obj_type = obj_type_for_def_keyword(current_kw)
+      data_row_count = 0
+    elseif obj_type and not is_meta_line(raw) then
+      data_row_count = data_row_count + 1
+      if data_row_count == 1 then
+        local values = split_csv_outside_quotes(raw)
+        local id_field = 1
+        if current_kw == "*MAT_OBJECT" then
+          id_field = 2
+        end
+        local idv = value_as_id(trim(values[id_field] or ""))
+        if idv and idv ~= "0" then
+          defs[obj_type] = defs[obj_type] or {}
+          if not defs[obj_type][idv] then
+            defs[obj_type][idv] = {
+              row = i,
+              col = 0,
+              keyword = current_kw,
+              line = raw,
+              file = file_path,
+            }
+          end
+        end
+        -- Definitions only live on the first data row for these keywords.
+        obj_type = nil
+      end
+    end
+  end
+  return defs
+end
+
+-- Lightweight object-ref scanner for disk files.
+-- Only collects curve/function references via fcn(id) / crv(id) syntax.
+local function scan_object_refs_from_lines(lines)
+  local refs = { curve = {} }
+  for _, raw in ipairs(lines or {}) do
+    if not is_meta_line(raw) and not parse_keyword(raw) then
+      for id in raw:gmatch("fcn%s*%(%s*(%d+)%s*%)") do
+        refs.curve[id] = true
+      end
+      for id in raw:gmatch("crv%s*%(%s*(%d+)%s*%)") do
+        refs.curve[id] = true
+      end
+    end
+  end
+  return refs
+end
+
+-- File-level caches for cross-file indexes, keyed by absolute path.
+-- Entries: { mtime = string, defs = table, refs = table, includes = table }
+M._cross_file_object_cache = {}
+M._cross_file_param_cache = {}
 
 function M.object_def_under_cursor(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
@@ -672,13 +1013,20 @@ function M.object_def_under_cursor(bufnr)
   if not data_rows or #data_rows == 0 then return nil end
   -- Must be on the first data row (where the definition ID lives)
   if row ~= data_rows[1] then return nil end
-  -- Must be on field 1 (the ID field, not a reference field like mid/secid)
-  local ctx = M.current_context(bufnr, row, col0)
-  if not ctx or ctx.field_idx ~= 1 then return nil end
   local first_line = lines[data_rows[1]] or ""
   local fields = split_csv_outside_quotes(first_line)
-  local idv = value_as_id(trim(fields[1] or ""))
+  -- *MAT_OBJECT: title is filtered by is_meta_line; first data row has the
+  -- material ID at field 2 (field 1 is empty / non-ID).
+  -- All other definition keywords keep the ID at field 1.
+  local kw_upper_d = (block.keyword or ""):upper()
+  local id_field = (kw_upper_d == "*MAT_OBJECT") and 2 or 1
+  -- Check that cursor is on the ID field (use direct column calculation,
+  -- avoids dependency on schema which may be absent for *MAT_OBJECT).
+  local cur_field = field_index_from_col(first_line, col0 + 1)
+  if cur_field ~= id_field then return nil end
+  local idv = value_as_id(trim(fields[id_field] or ""))
   if not idv then return nil end
+  if idv == "0" or idv == 0 then return nil end
   return { obj_type = obj_type, id = idv }
 end
 
@@ -692,6 +1040,7 @@ function M.object_under_cursor(bufnr)
   local fields = split_csv_outside_quotes(line)
   local idv = value_as_id(trim(fields[ctx.field_idx] or ""))
   if not idv then return nil end
+  if idv == "0" or idv == 0 then return nil end
   local obj_type = ctx.param_name and classify_ref_type(ctx.keyword, ctx.param_name) or nil
   if not obj_type and ctx.field_idx > 1 then
     for i = ctx.field_idx - 1, 1, -1 do
@@ -704,10 +1053,284 @@ function M.object_under_cursor(bufnr)
   return { obj_type = obj_type, id = idv }
 end
 
+function M.build_cross_file_object_index(bufnr)
+  bufnr = (bufnr == nil or bufnr == 0) and vim.api.nvim_get_current_buf() or bufnr
+  local all_defs = {}
+  local all_refs = {}
+  local searched = {}
+
+  local search_buf
+  local search_file
+
+  search_buf = function(bn)
+    if vim.b[bn].impetus_info_buffer == 1
+      or vim.b[bn].impetus_help_buffer == 1
+      or vim.b[bn].impetus_popup_buffer == 1
+    then
+      return
+    end
+    local bfile = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bn), ":p")
+    if searched[bfile] then return end
+    searched[bfile] = true
+    local bidx = M.build_buffer_index(bn)
+    for obj_type, defs in pairs(bidx.object_defs or {}) do
+      all_defs[obj_type] = all_defs[obj_type] or {}
+      for idv, info in pairs(defs) do
+        if not all_defs[obj_type][idv] then
+          all_defs[obj_type][idv] = vim.tbl_extend("force", { file = bfile }, info)
+        end
+      end
+    end
+    for obj_type, refs_by_id in pairs(bidx.object_refs or {}) do
+      all_refs[obj_type] = all_refs[obj_type] or {}
+      for idv, _ in pairs(refs_by_id) do
+        all_refs[obj_type][idv] = true
+      end
+    end
+    local blines = vim.api.nvim_buf_get_lines(bn, 0, -1, false)
+    for _, path in ipairs(collect_include_paths(bn, blines)) do
+      search_file(path)
+    end
+  end
+
+  search_file = function(path)
+    local inc_bufnr = vim.fn.bufnr(path)
+    if inc_bufnr > 0 and vim.api.nvim_buf_is_loaded(inc_bufnr) then
+      search_buf(inc_bufnr)
+      return
+    end
+    if searched[path] then return end
+    searched[path] = true
+
+    local ok, result = pcall(function()
+      local f = io.open(path, "r")
+      if not f then return nil end
+      local ls = {}
+      for l in f:lines() do ls[#ls + 1] = l end
+      f:close()
+      return ls
+    end)
+    local inc_lines = ok and result or nil
+    if not inc_lines then
+      return
+    end
+
+    -- Check cache before parsing
+    local mtime = file_mtime(path)
+    local cached = M._cross_file_object_cache[path]
+    if cached and cached.mtime == mtime and cached.defs then
+      for obj_type, defs in pairs(cached.defs) do
+        all_defs[obj_type] = all_defs[obj_type] or {}
+        for idv, info in pairs(defs) do
+          if not all_defs[obj_type][idv] then
+            all_defs[obj_type][idv] = info
+          end
+        end
+      end
+      for obj_type, refs_by_id in pairs(cached.refs or {}) do
+        all_refs[obj_type] = all_refs[obj_type] or {}
+        for idv, _ in pairs(refs_by_id) do
+          all_refs[obj_type][idv] = true
+        end
+      end
+      -- Cache hit: recurse includes without re-reading the file
+      for _, p in ipairs(cached.includes or {}) do
+        search_file(p)
+      end
+      return
+    end
+
+    local file_defs = scan_object_defs_from_lines(inc_lines, path)
+    local file_refs = scan_object_refs_from_lines(inc_lines)
+    local dir = vim.fn.fnamemodify(path, ":h")
+    local includes = collect_include_paths_from_lines(inc_lines, dir)
+    M._cross_file_object_cache[path] = { mtime = mtime, defs = file_defs, refs = file_refs, includes = includes }
+    for obj_type, defs in pairs(file_defs) do
+      all_defs[obj_type] = all_defs[obj_type] or {}
+      for idv, info in pairs(defs) do
+        if not all_defs[obj_type][idv] then
+          all_defs[obj_type][idv] = info
+        end
+      end
+    end
+    for obj_type, refs_by_id in pairs(file_refs) do
+      all_refs[obj_type] = all_refs[obj_type] or {}
+      for idv, _ in pairs(refs_by_id) do
+        all_refs[obj_type][idv] = true
+      end
+    end
+    for _, p in ipairs(includes) do
+      search_file(p)
+    end
+  end
+
+  search_buf(bufnr)
+
+  for _, bn in ipairs(vim.api.nvim_list_bufs()) do
+    if bn ~= bufnr and vim.api.nvim_buf_is_loaded(bn) then
+      local ft = vim.bo[bn].filetype
+      if ft == "impetus" or ft == "kwt" then
+        if vim.b[bn].impetus_info_buffer ~= 1
+          and vim.b[bn].impetus_help_buffer ~= 1
+          and vim.b[bn].impetus_popup_buffer ~= 1
+          and vim.b[bn].impetus_child_buffer ~= 1
+        then
+          search_buf(bn)
+        end
+      end
+    end
+  end
+
+  return { defs = all_defs, refs = all_refs }
+end
+
 function M.object_definition(bufnr, obj_type, id)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
+  -- 1. Priority: search in current buffer
   local idx = M.build_buffer_index(bufnr)
-  return (idx.object_defs[obj_type] or {})[id]
+  local local_def = (idx.object_defs[obj_type] or {})[id]
+  if local_def then
+    return local_def
+  end
+
+  -- 2. Search include files in order, stopping at first match
+  local buf_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":p")
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local dir = vim.fn.fnamemodify(buf_file, ":h")
+  for _, inc_path in ipairs(collect_include_paths_from_lines(lines, dir)) do
+    local abs = vim.fn.fnamemodify(inc_path, ":p")
+    -- Check loaded buffer first
+    local inc_bufnr = vim.fn.bufnr(abs)
+    if inc_bufnr > 0 and vim.api.nvim_buf_is_loaded(inc_bufnr) then
+      local inc_idx = M.build_buffer_index(inc_bufnr)
+      local def = (inc_idx.object_defs[obj_type] or {})[id]
+      if def then
+        return vim.tbl_extend("force", { file = abs }, def)
+      end
+    else
+      -- Check disk file: cache first, then lightweight scan
+      local mtime = file_mtime(abs)
+      local cached = M._cross_file_object_cache[abs]
+      if cached and cached.mtime == mtime and cached.defs then
+        local def = cached.defs[obj_type] and cached.defs[obj_type][id]
+        if def then
+          return def
+        end
+      else
+        local ok, f = pcall(io.open, abs, "r")
+        if ok and f then
+          local ls = {}
+          for l in f:lines() do ls[#ls + 1] = l end
+          f:close()
+          local file_defs = scan_object_defs_from_lines(ls, abs)
+          local file_refs = scan_object_refs_from_lines(ls)
+          local inc_dir = vim.fn.fnamemodify(abs, ":h")
+          local includes = collect_include_paths_from_lines(ls, inc_dir)
+          M._cross_file_object_cache[abs] = { mtime = mtime, defs = file_defs, refs = file_refs, includes = includes }
+          local def = file_defs[obj_type] and file_defs[obj_type][id]
+          if def then
+            return def
+          end
+        end
+      end
+    end
+  end
+
+  -- 3. Last resort: check other open buffers
+  for _, bn in ipairs(vim.api.nvim_list_bufs()) do
+    if bn ~= bufnr and vim.api.nvim_buf_is_loaded(bn) then
+      local ft = vim.bo[bn].filetype
+      if ft == "impetus" or ft == "kwt" then
+        local bfile = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bn), ":p")
+        local inc_idx = M.build_buffer_index(bn)
+        local def = (inc_idx.object_defs[obj_type] or {})[id]
+        if def then
+          return vim.tbl_extend("force", { file = bfile }, def)
+        end
+      end
+    end
+  end
+
+  return nil
+end
+
+-- Asynchronously warm up cross-file caches for all loaded impetus buffers.
+-- Uses vim.defer_fn to spread work across frames and avoid UI blocking.
+function M.warmup_cross_file_cache()
+  local function warmup_file(path)
+    local abs = vim.fn.fnamemodify(path, ":p")
+    if abs == "" or vim.fn.filereadable(abs) ~= 1 then
+      return
+    end
+    local mtime = file_mtime(abs)
+    if not mtime then
+      return
+    end
+
+    -- Warm param cache
+    local param_cached = M._cross_file_param_cache[abs]
+    if not (param_cached and param_cached.mtime == mtime) then
+      local ok, f = pcall(io.open, abs, "r")
+      if ok and f then
+        local ls = {}
+        for l in f:lines() do ls[#ls + 1] = l end
+        f:close()
+        local params = build_params_from_lines(ls)
+        local dir = vim.fn.fnamemodify(abs, ":h")
+        local includes = collect_include_paths_from_lines(ls, dir)
+        for name, defs in pairs(params.defs) do
+          for _, d in ipairs(defs) do d.file = abs end
+        end
+        for name, refs in pairs(params.refs) do
+          for _, r in ipairs(refs) do r.file = abs end
+        end
+        M._cross_file_param_cache[abs] = { mtime = mtime, result = params, includes = includes }
+      end
+    end
+
+    -- Warm object cache
+    local obj_cached = M._cross_file_object_cache[abs]
+    if not (obj_cached and obj_cached.mtime == mtime) then
+      local ok, f = pcall(io.open, abs, "r")
+      if ok and f then
+        local ls = {}
+        for l in f:lines() do ls[#ls + 1] = l end
+        f:close()
+        local file_defs = scan_object_defs_from_lines(ls, abs)
+        local dir = vim.fn.fnamemodify(abs, ":h")
+        local includes = collect_include_paths_from_lines(ls, dir)
+        M._cross_file_object_cache[abs] = { mtime = mtime, result = file_defs, includes = includes }
+      end
+    end
+  end
+
+  local function warmup_buffer(bn)
+    if not (bn and vim.api.nvim_buf_is_valid(bn)) then
+      return
+    end
+    local ft = vim.bo[bn].filetype
+    if ft ~= "impetus" and ft ~= "kwt" then
+      return
+    end
+    local lines = vim.api.nvim_buf_get_lines(bn, 0, -1, false)
+    local buf_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bn), ":p")
+    local dir = vim.fn.fnamemodify(buf_file, ":h")
+    for _, path in ipairs(collect_include_paths_from_lines(lines, dir)) do
+      pcall(warmup_file, path)
+    end
+  end
+
+  local bufs = vim.api.nvim_list_bufs()
+  local i = 1
+  local function next_frame()
+    if i > #bufs then
+      return
+    end
+    pcall(warmup_buffer, bufs[i])
+    i = i + 1
+    vim.defer_fn(next_frame, 10)
+  end
+  vim.defer_fn(next_frame, 500)
 end
 
 function M.object_references(bufnr, obj_type, id)

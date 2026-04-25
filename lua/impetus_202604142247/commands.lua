@@ -7,7 +7,7 @@ local analysis = require("impetus.analysis")
 local actions = require("impetus.actions")
 local info = require("impetus.info")
 
--- 安全地加载 info_v2
+-- Safely load info_v2
 local info_v2 = nil
 local ok, err = pcall(function()
   info_v2 = require("impetus.info_v2")
@@ -1171,7 +1171,7 @@ function M.register()
   end, {})
 
   vim.api.nvim_create_user_command("ImpetusInfo", function()
-    -- 根据配置选择使用 info 或 info_v2
+    -- Choose info or info_v2 based on config
     if config.get().use_info_v2 and info_v2 then
       info_v2.toggle_for_current()
     else
