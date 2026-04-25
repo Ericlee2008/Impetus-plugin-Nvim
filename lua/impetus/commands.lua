@@ -747,9 +747,13 @@ local function clean_current_buffer()
   end
 
   for _, b in ipairs(blocks) do
-    local entry = store.get_keyword(b.keyword)
+    local keyword_upper = b.keyword:upper()
+    local entry = store.get_keyword(keyword_upper)
     local sig_rows = entry and entry.signature_rows or nil
-    out[#out + 1] = lines[b.start_row] or ""
+    local keyword_line = lines[b.start_row] or ""
+    -- Normalize lowercase keyword to uppercase
+    keyword_line = keyword_line:gsub(vim.pesc(b.keyword), keyword_upper)
+    out[#out + 1] = keyword_line
     local data_row_idx = 0
 
     for r = b.start_row + 1, b.end_row do
@@ -843,7 +847,8 @@ local function advanced_clear_current_buffer()
   end
 
   for _, b in ipairs(blocks) do
-    if store.get_keyword(b.keyword) then
+    local keyword_upper = b.keyword:upper()
+    if store.get_keyword(keyword_upper) then
       local block_lines = {}
       local block_rows = {}
       for r = b.start_row, b.end_row do
@@ -853,21 +858,26 @@ local function advanced_clear_current_buffer()
           block_rows[#block_rows + 1] = r
         else
           removed = removed + 1
-          entries[#entries + 1] = { row = r, line = line, reason = "comment", keyword = b.keyword }
+          entries[#entries + 1] = { row = r, line = line, reason = "comment", keyword = keyword_upper }
         end
       end
 
       while #block_lines > 0 and is_blank_line(block_lines[1] or "") do
-        entries[#entries + 1] = { row = block_rows[1], line = block_lines[1], reason = "leading-blank", keyword = b.keyword }
+        entries[#entries + 1] = { row = block_rows[1], line = block_lines[1], reason = "leading-blank", keyword = keyword_upper }
         table.remove(block_lines, 1)
         table.remove(block_rows, 1)
         removed = removed + 1
       end
       while #block_lines > 0 and is_blank_line(block_lines[#block_lines] or "") do
-        entries[#entries + 1] = { row = block_rows[#block_rows], line = block_lines[#block_lines], reason = "trailing-blank", keyword = b.keyword }
+        entries[#entries + 1] = { row = block_rows[#block_rows], line = block_lines[#block_lines], reason = "trailing-blank", keyword = keyword_upper }
         table.remove(block_lines, #block_lines)
         table.remove(block_rows, #block_rows)
         removed = removed + 1
+      end
+
+      -- Normalize keyword line to uppercase
+      if #block_lines > 0 then
+        block_lines[1] = block_lines[1]:gsub(vim.pesc(b.keyword), keyword_upper)
       end
 
       for _, line in ipairs(block_lines) do
