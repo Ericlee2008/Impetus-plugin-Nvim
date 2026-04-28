@@ -134,7 +134,7 @@ local function normalize_token(s)
 end
 
 local function normalize_param_name(s)
-  return (trim(s or ""):gsub("^%%", ""):gsub("^%[", ""):gsub("%]$", ""))
+  return (trim(s or ""):gsub("^%%", ""):gsub("^%[", ""):gsub("%]$", "")):lower()
 end
 
 local function value_as_id(v)
@@ -192,7 +192,7 @@ local function classify_def_type(keyword, param_name)
   if p:match("^ctid") or p:match("^coid") or p:match("^bcid") or p:match("^sbdid") then
     return "command"
   end
-  if k:match("^%*COORDINATE_SYSTEM") and p == "csysid" then
+  if p == "csysid" then
     return "coordinate_system"
   end
   if k == "*NODE" and p == "nid" then
@@ -450,34 +450,30 @@ end
 local function build_params_from_lines(lines)
   local params = { defs = {}, refs = {} }
   for i, raw in ipairs(lines or {}) do
-    local trimmed = trim(raw or "")
-    local is_comment = trimmed:sub(1, 1) == "#" or trimmed:sub(1, 1) == "$"
-    if not is_comment then
-      for p in (raw or ""):gmatch("%%([%a_][%w_]*)") do
-        local key = normalize_param_name(p)
-        params.refs[key] = params.refs[key] or {}
-        params.refs[key][#params.refs[key] + 1] = {
-          row = i,
-          col = (raw:find("%" .. p, 1, true) or 1) - 1,
-          line = raw,
-        }
+    for p in (raw or ""):gmatch("%%([%a_][%w_]*)") do
+      local key = normalize_param_name(p)
+      params.refs[key] = params.refs[key] or {}
+      params.refs[key][#params.refs[key] + 1] = {
+        row = i,
+        col = (raw:find("%" .. p, 1, true) or 1) - 1,
+        line = raw,
+      }
+    end
+    local def_name = (raw or ""):match("^%s*%%?([%a_][%w_]*)%s*=")
+    if def_name then
+      local key = normalize_param_name(def_name)
+      params.defs[key] = params.defs[key] or {}
+      local percent_pos = raw:find("%" .. def_name, 1, true)
+      local name_pos = raw:find(def_name, 1, true)
+      local c, ec
+      if percent_pos then
+        c = percent_pos - 1
+        ec = c + 1 + #def_name
+      else
+        c = (name_pos or 1) - 1
+        ec = c + #def_name
       end
-      local def_name = (raw or ""):match("^%s*%%?([%a_][%w_]*)%s*=")
-      if def_name then
-        local key = normalize_param_name(def_name)
-        params.defs[key] = params.defs[key] or {}
-        local percent_pos = raw:find("%" .. def_name, 1, true)
-        local name_pos = raw:find(def_name, 1, true)
-        local c, ec
-        if percent_pos then
-          c = percent_pos - 1
-          ec = c + 1 + #def_name
-        else
-          c = (name_pos or 1) - 1
-          ec = c + #def_name
-        end
-        params.defs[key][#params.defs[key] + 1] = { row = i, col = c, end_col = ec, line = raw }
-      end
+      params.defs[key][#params.defs[key] + 1] = { row = i, col = c, end_col = ec, line = raw }
     end
   end
   return params
@@ -972,30 +968,26 @@ function M.build_buffer_index(bufnr)
     if kw then
       idx.keywords[#idx.keywords + 1] = { keyword = kw, row = i }
     end
-    local trimmed = trim(raw or "")
-    local is_comment = trimmed:sub(1, 1) == "#" or trimmed:sub(1, 1) == "$"
-    if not is_comment then
-      for p in (raw or ""):gmatch("%%([%a_][%w_]*)") do
-        local key = normalize_param_name(p)
-        idx.params.refs[key] = idx.params.refs[key] or {}
-        idx.params.refs[key][#idx.params.refs[key] + 1] = { row = i, col = (raw:find("%" .. p, 1, true) or 1) - 1, line = raw }
+    for p in (raw or ""):gmatch("%%([%a_][%w_]*)") do
+      local key = normalize_param_name(p)
+      idx.params.refs[key] = idx.params.refs[key] or {}
+      idx.params.refs[key][#idx.params.refs[key] + 1] = { row = i, col = (raw:find("%" .. p, 1, true) or 1) - 1, line = raw }
+    end
+    local def_name = raw:match("^%s*%%?([%a_][%w_]*)%s*=")
+    if def_name then
+      local key = normalize_param_name(def_name)
+      idx.params.defs[key] = idx.params.defs[key] or {}
+      local percent_pos = raw:find("%" .. def_name, 1, true)
+      local name_pos = raw:find(def_name, 1, true)
+      local c, ec
+      if percent_pos then
+        c = percent_pos - 1
+        ec = c + 1 + #def_name
+      else
+        c = (name_pos or 1) - 1
+        ec = c + #def_name
       end
-      local def_name = raw:match("^%s*%%?([%a_][%w_]*)%s*=")
-      if def_name then
-        local key = normalize_param_name(def_name)
-        idx.params.defs[key] = idx.params.defs[key] or {}
-        local percent_pos = raw:find("%" .. def_name, 1, true)
-        local name_pos = raw:find(def_name, 1, true)
-        local c, ec
-        if percent_pos then
-          c = percent_pos - 1
-          ec = c + 1 + #def_name
-        else
-          c = (name_pos or 1) - 1
-          ec = c + #def_name
-        end
-        idx.params.defs[key][#idx.params.defs[key] + 1] = { row = i, col = c, end_col = ec, line = raw }
-      end
+      idx.params.defs[key][#idx.params.defs[key] + 1] = { row = i, col = c, end_col = ec, line = raw }
     end
   end
 

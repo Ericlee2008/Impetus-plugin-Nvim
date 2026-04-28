@@ -11,6 +11,7 @@ local defaults = {
   tab_field_jump = true,
   side_help_track = true,
   side_help_width = 68,
+  ref_marks = true,
   dev_hot_reload = true,
   dev_mode = false,
 }

@@ -173,6 +173,7 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 | `:ImpetusHelpClose` | — | Close help pane |
 | `:ImpetusCheatSheet` | — | Open quick help popup |
 | `:ImpetusRefresh` | — | Full plugin + database refresh (`dev_hot_reload`) |
+| `:ImpetusUpdate` | — | Force refresh of index, lint, and ref marks for current buffer |
 | `:ImpetusClean` | `[args]` | Clean command (see §8) |
 | `:ImpetusClear` | `[args]` | Alias for `:ImpetusClean` |
 | `:ImpetusReplaceParams` | `[-a｜-b]` | Replace parameters with values (see §9) |
@@ -200,6 +201,7 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 | `:Cinfo` / `:Ci` | `:ImpetusInfo` | Toggle info pane |
 | `:Cregistry` / `:Cr` | `:ImpetusObjects` | Object registry |
 | `:Crefresh` / `:CR` | `:ImpetusRefresh` | Full refresh |
+| `:Update` | `:ImpetusUpdate` | Force buffer analysis refresh |
 | `:Creload` / `:Crl` | `:ImpetusReload` | Reload database |
 | `:Cgoto` / `:Cg` | `:ImpetusParamDef` | Goto definition |
 | `:Cfind` / `:Cw` | `:ImpetusParamRefs` | Find references |
@@ -387,6 +389,8 @@ After : r22 = 0.5                (definition itself is replaced)
 - `:re -a` skips `*PARAMETER` definition rows (only replaces references)
 - `:re -b` also replaces and evaluates inside `*PARAMETER` blocks
 
+**Auto-refresh:** After `:re -a` or `:re -b` makes changes, the plugin automatically refreshes the buffer index, lint diagnostics, and ref marks (green/blue underlines), since `nvim_buf_set_lines` does not trigger `TextChanged`.
+
 **Logged:** Every changed line is written to `impetus_nvim.log` with row number, before, and after values.
 
 ---
@@ -399,7 +403,7 @@ Context-aware jump:
 
 1. **On `%param`**: Jumps to the `*PARAMETER` definition line
 2. **On `fcn(id)` / `crv(id)`**: If the parameter description mentions "function" or "curve", jumps to the matching `*FUNCTION` / `*CURVE` definition
-3. **On object reference field** (e.g., `pid`, `mid`, `gid`): Jumps to the keyword block that defines that ID
+3. **On object reference field** (e.g., `pid`, `mid`, `gid`, `tabid`): Jumps to the keyword block that defines that ID (e.g., `tabid` → `*TABLE`)
 4. **On definition keyword** (e.g., `*PART` line): Notifies that you are already at the definition
 
 If the target is in another file, it opens in a left-side navigation split.
@@ -627,7 +631,9 @@ The value `0` means "undefined / unset" for damage, thermal, and EOS references.
 
 ### 21.2 `pid_offset` / `mid_offset` Disconnected
 
-Parameters named `pid_offset`, `mid_offset`, etc. are **not** treated as object references. Only exact matches (`pid`, `mid`, `fid`, `gid`, `did`, `thpid`, `eosid`) and their `_N` suffixes (`pid_1`, `mid_2`, etc.) are classified as references.
+Parameters named `pid_offset`, `mid_offset`, etc. are **not** treated as object references. Only exact matches (`pid`, `mid`, `fid`, `gid`, `did`, `thpid`, `eosid`, `tabid`) and their `_N` suffixes (`pid_1`, `mid_2`, `tabid_m`, etc.) are classified as references.
+- `tabid` references resolve to `*TABLE` definitions (first field `coid`).
+- `sph` and `dp` (discrete particle) IDs are tracked for `*PARTICLE_SPH` / `*PARTICLE_HE` / `*PARTICLE_AIR` / `*PARTICLE_SOIL`.
 
 ### 21.3 `*INCLUDE` Path Format
 

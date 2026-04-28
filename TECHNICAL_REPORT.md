@@ -57,6 +57,7 @@ Hardcode all 14 valid textual forms into a Lua table `unit_system_aliases`. Both
 ### 2.3 Implementation Path
 
 - **File:** `lua/impetus/lint.lua`
+
 - **Code:**
   
   ```lua
@@ -71,7 +72,9 @@ Hardcode all 14 valid textual forms into a Lua table `unit_system_aliases`. Both
     ["MMMGMS"] = "MMMGMS", ["MM/MG/MS"] = "MMMGMS",
   }
   ```
+
 - `check_enum_values` uses this table when `keyword == "*UNIT_SYSTEM"` and `param_name == "units"`.
+
 - `actions.lua` (`show_ref_completion`) hardcodes the same list for popup suggestions.
 
 ### 2.4 Result
@@ -123,11 +126,14 @@ Introduce `id_row_omitted` detection using an `is_id_like` heuristic:
 ### 3.3 Implementation Path
 
 - **Files:** `lua/impetus/lint.lua`, `lua/impetus/side_help.lua`
+
 - Affected functions:
+  
   - `check_enum_values`
   - `check_physics_sanity`
   - `check_field_counts`
   - `side_help` rendering
+
 - Logic (example from `lint.lua`):
   
   ```lua
@@ -173,6 +179,7 @@ During lint, collect all `pid` values referenced by `*GEOMETRY_PART` (second dat
 ### 4.3 Implementation Path
 
 - **File:** `lua/impetus/lint.lua`
+
 - **Code:**
   
   ```lua
@@ -371,6 +378,7 @@ Create `lua/impetus/log.lua` — a minimalist append-only logger. Every mutating
 ### 9.3 Implementation Path
 
 - **File:** `lua/impetus/log.lua`
+
 - **Format:**
   
   ```
@@ -380,6 +388,7 @@ Create `lua/impetus/log.lua` — a minimalist append-only logger. Every mutating
     L10    before: 1, 1, [%L / 2]
            after : 1, 1, 50
   ```
+
 - **Logged commands:** `clean -c`, `clean -a`, `re`, `re -a`, `show_ref_completion`
 
 ### 9.4 Result

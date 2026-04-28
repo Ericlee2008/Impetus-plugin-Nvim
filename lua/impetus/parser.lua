@@ -42,7 +42,7 @@ local function is_non_data_line(line)
   if line:sub(1, 1) == "#" or line:sub(1, 1) == "$" then
     return true
   end
-  if line == '"Optional title"' then
+  if line:match('^".*"$') then
     return true
   end
   if line == "Variable         Description" then

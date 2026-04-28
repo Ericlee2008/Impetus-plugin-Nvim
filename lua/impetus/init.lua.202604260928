@@ -567,10 +567,6 @@ local function setup_filetype_behaviors()
     end
   end
 
-  -- Resolve the plugin root directory once so we can source our own syntax file
-  -- directly (avoids loading a stale copy from an older installation on rtp).
-  local plugin_root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
-
   local function ensure_impetus_syntax(buf)
     if not (buf and vim.api.nvim_buf_is_valid(buf)) then
       return
@@ -578,16 +574,10 @@ local function setup_filetype_behaviors()
     if vim.bo[buf].filetype ~= "impetus" then
       return
     end
-    local syntax_path = plugin_root .. "/syntax/impetus.vim"
     vim.api.nvim_buf_call(buf, function()
       vim.cmd("silent! syntax clear")
       vim.cmd("silent! unlet! b:current_syntax")
-      -- Source our own syntax file explicitly, then let runtime pick up any
-      -- user overrides in after/syntax/.
-      if vim.fn.filereadable(syntax_path) == 1 then
-        vim.cmd("silent! source " .. vim.fn.fnameescape(syntax_path))
-      end
-      vim.cmd("silent! runtime! after/syntax/impetus.vim")
+      vim.cmd("silent! runtime! syntax/impetus.vim")
     end)
   end
 
@@ -598,27 +588,19 @@ local function setup_filetype_behaviors()
     if vim.b[buf].impetus_help_buffer == 1 or vim.b[buf].impetus_info_buffer == 1 then
       return
     end
-    -- Skip scratch buffers (e.g. intrinsic hover popups) to avoid reapplying
-    -- global highlights / syntax on transient windows.
-    local name = vim.api.nvim_buf_get_name(buf)
-    if name == "" then
-      return
-    end
     ensure_impetus_filetype(buf)
     if vim.bo[buf].filetype ~= "impetus" then
       return
     end
-    -- Always re-apply highlight palette (cheap) so that colorschemes or other
-    -- plugins that load after us cannot permanently override our groups.
-    highlight.apply()
-    -- Guard the heavier syntax/intrinsic work against redundant calls within the
-    -- same changedtick (common when multiple autocmds fire on buffer open).
+    -- Guard against redundant calls within the same changedtick (common when
+    -- multiple autocmds fire simultaneously on buffer open).
     local tick = vim.api.nvim_buf_get_changedtick(buf)
     if vim.b[buf].impetus_last_visuals_tick == tick then
       return
     end
     vim.b[buf].impetus_last_visuals_tick = tick
     ensure_impetus_syntax(buf)
+    highlight.apply()
     vim.b[buf].impetus_intrinsic_applied = 0
     intrinsic.apply_syntax_for_current_buffer()
     if config.get().ref_marks then

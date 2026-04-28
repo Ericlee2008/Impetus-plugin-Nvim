@@ -98,13 +98,28 @@ local function parse_docs()
             signature = name_part,
             desc = desc,
           }
-          -- Also store base name for plain-word fallback (last one wins)
-          docs[lower_base] = {
+          -- Store case-sensitive key for single-letter variables like D/V/A
+          docs[name_part] = {
             type = mode,
-            name = lower_base,
+            name = name_part,
             signature = name_part,
             desc = desc,
           }
+          -- Also store base name for plain-word fallback.
+          -- If the same lower_base already exists with a DIFFERENT type
+          -- (e.g. "D" variable vs "d(i,j)" function), remove it to avoid
+          -- ambiguity.  Same-type collisions keep the first entry.
+          local existing = docs[lower_base]
+          if not existing then
+            docs[lower_base] = {
+              type = mode,
+              name = lower_base,
+              signature = name_part,
+              desc = desc,
+            }
+          elseif existing.type ~= mode then
+            docs[lower_base] = nil
+          end
         end
       end
     end
@@ -119,6 +134,10 @@ end
 -- Get word under cursor.
 -- For intrinsic symbols like SC_jet(4), extracts the full token including
 -- the parenthesised argument so that each overload gets its own hover text.
+-- We do NOT use vim.fn.expand('<cword>') because the user may have extended
+-- 'iskeyword' to include '-' (for keywords like *change_p-order).  Instead
+-- we manually extract the token using a fixed alnum boundary so that x in
+-- (x-0.05) is correctly identified as just "x".
 local function word_under_cursor()
   local line = vim.api.nvim_get_current_line()
   local col = vim.api.nvim_win_get_cursor(0)[2] -- 0-based
@@ -136,10 +155,26 @@ local function word_under_cursor()
     pos = e + 1
   end
 
-  -- Fallback to plain <cword>
-  local cword = vim.fn.expand("<cword>")
-  if cword and cword ~= "" then
-    return cword
+  -- Manual word extraction with fixed alnum boundary (independent of iskeyword)
+  local function is_word_char(ch)
+    return ch:match("[[:alnum:]_]") ~= nil
+  end
+
+  -- col is 0-based; line:sub() is 1-based.
+  local col1 = col + 1
+
+  local start_col = col1
+  while start_col > 1 and is_word_char(line:sub(start_col - 1, start_col - 1)) do
+    start_col = start_col - 1
+  end
+
+  local end_col = col1
+  while end_col < #line and is_word_char(line:sub(end_col + 1, end_col + 1)) do
+    end_col = end_col + 1
+  end
+
+  if start_col <= end_col then
+    return line:sub(start_col, end_col)
   end
   return nil
 end
@@ -195,8 +230,34 @@ function M.show()
   if not entry then
     entry = docs[word:lower()]
   end
+  -- Fallback: if word looks like func(num) but docs only have func(arg_name),
+  -- try the base name (e.g. dxs(1) -> dxs)
+  if not entry then
+    local base = word:match("^([%a_][%w_]*)%s*%(%s*%d+%s*%)")
+    if base then
+      entry = docs[base] or docs[base:lower()]
+    end
+  end
   if not entry then
     return
+  end
+
+  -- Context-sensitive: D, V, A are only intrinsic inside *BC_MOTION blocks.
+  if word == "D" or word == "V" or word == "A" then
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    local lines_buf = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local in_bc_motion = false
+    for r = row, 1, -1 do
+      local line = lines_buf[r] or ""
+      local kw = line:match("^%s*(%*[%w_%-]+)")
+      if kw then
+        in_bc_motion = (kw:upper() == "*BC_MOTION")
+        break
+      end
+    end
+    if not in_bc_motion then
+      return
+    end
   end
 
   -- Prepare display content
@@ -251,7 +312,7 @@ function M.show()
     style = "minimal",
     border = "rounded",
     focusable = false,
-    noautocmd = false,
+    noautocmd = true,
   }
 
   -- Place above if not enough space below

@@ -337,7 +337,22 @@ Variable         Description
 sbdid          : Subdomain ID
 type           : High explosive type
                  options:
-                 preset -> see list below
+                 preset -> ANFO 
+                           C4 
+                           COMPA 
+                           COMPB 
+                           HMX 
+                           LX-10-1 
+                           LX-14-0 
+                           M46 
+                           MCX-6100 
+                           NSP-711 
+                           OCTOL 
+                           PBXN-110 
+                           PBXN-9010 
+                           PETN 
+                           TETRYL 
+                           TNT
                  user -> user defined
                  mid -> material ID
 gid            : Geometry ID
@@ -353,8 +368,8 @@ R_2            : JWL coefficient
 ω              : JWL coefficient
 e_0            : Internal energy per unit volume, released at detonation
 D              : Detonation velocity
-e_ab           : Afterburn energy per unit volume at detonation time
-t_ab           : Afterburn time parameter, controlling energy release rate
+e_ab           : Afterburn energy per unit volume at detonation time (optional)
+t_ab           : Afterburn time parameter, controlling energy release rate (optional)
 C_v            : Heat capacity
                  default: 711.14 J/kg K
 
@@ -1738,7 +1753,7 @@ mtnt           : Charge size (kg TNT equivalent)
 x_c            : Charge location (x-coordinate)
 y_c            : Charge location (y-coordinate)
 z_c            : Charge location (z-coordinate)
-tabid            : ID of TABLE defining reflective surfaces
+tabid          : ID of TABLE defining reflective surfaces
 diffract       : Diffraction level
                  options:
                  0 -> no diffraction
@@ -1750,7 +1765,7 @@ toff           : Time offset flag
                  0 -> no offset
                  1 -> time of arrival is offset to t=0
 ground         : Reflecting ground
-                 options: X, Y, Z
+                 options: 0, X, Y, Z
                  default: no ground
 t_end          : Deactivation time
                  default: not used
@@ -1990,6 +2005,7 @@ cid            : ID of a CURVE or FUNCTION defining the thermal surface load ver
 sf             : Curve scale factor
                  default: 1
 t_beg          : Start time
+                 default: 0
 t_end          : End time
                  default: 1.0e20
 erode          : Flag to account fo element erosion and exposure of new free surfaces
@@ -3572,9 +3588,9 @@ Variable         Description
 mfid           : Merge failure command ID
 σ_fail         : Tensile failure stress
 tau_fail       : Shear failure stres
-G_I            : Modus I energy per unit area
-G_II           : Modus II energy per unit area
-Δ_ref          : Element reference size
+G_I            : Optional modus I energy per unit area
+G_II           : Optional modus II energy per unit area
+Δ_ref          : OPtional element reference size
 
 *MERGE_FAILURE_FORCE
 mfid,  T_fail,  S_fail,  n_T,  n_S
@@ -3608,7 +3624,7 @@ param=expression,  description
 Variable         Description
 object_id      : Unique name as given in the object library
 variant        : Variant number
-revision       : Revision number
+revision       : Optional revision number
 sf_x, sf_y, sf_z: Scale factors for nodal coordinates in x, y and z directions
                  default: 1
 nid_offset     : Number to add to all node IDs
@@ -3639,23 +3655,23 @@ Variable         Description
                  default: a database file is generated at t_term
 fragment       : Flag to activate fragment list generation
                  options:
-                 0 -> no fragment list generation
+                 0 -> no fragment list generation (default)
                  1 -> FE fragment list is written to .imp-database
                  2 -> SPH fragment list is written to .imp-database
                  3 -> FE and SPH fragment list is written to .imp-database
 nfilter        : Filter for node and discrete particle data that will be written to impetus.imp
                  options:
-                 0 -> output all node data
+                 0 -> output all node data (default)
                  1 -> output displacements only
                  2 -> do not output discrete particles
 efilter        : Filter for element data that will be written to impetus.imp
                  options:
-                 0 -> output all element data
+                 0 -> output all element data (default)
                  1 -> output effective stress, plastic strain and damage
                  2 -> output no element data
 entype_res     : Entity type for state file output. The state file is an ASCII file in command 
                  format containing elements, nodes (coordinates and velocities) and contact 
-				 information. Stresses, strains and state variables are output to a separate binary file.
+		 information. Stresses, strains and state variables are output to a separate binary file.
                  options: P, PS, ALL
                  default: no state file
 enid_res       : Entity ID for state file output
@@ -3760,10 +3776,10 @@ R              : Section radius
 
 *OUTPUT_SENSOR
 "Optional title"
-coid,  pid,  x_0,  y_0,  z_0,  R,  csysid,  ref,  lagrange
+sid,  pid,  x_0,  y_0,  z_0,  R,  csysid,  ref,  lagrange
 ----------------------------------------------------------------
 Variable         Description
-coid           : Sensor ID
+sid            : Sensor ID
 pid            : Sensor type or ID of part where the sensor is located
                  options: Part ID, DP (discrete particle), SPH, CFD or RB (rebar)
                  default: nearest part
@@ -3838,8 +3854,11 @@ n_z            : z-component of thickness measuring direction
                  default: not used
 
 *OUTPUT_USER
+"filename"
 coid,  "name_a",  fcn_a,  type_a
+"name_1", fcn_1, type_1
 .
+"name_n", fcn_n, type_n
 ----------------------------------------------------------------
 Variable         Description
 filename       : File name for ASCII output (command ID and .out will be added as an extension)
@@ -4027,7 +4046,7 @@ bc_x0,  bc_y0,  bc_z0,  bc_x1,  bc_y1,  bc_z1
 ----------------------------------------------------------------
 Variable         Description
 entype         : Structure entity type for particle structure interaction
-                 options: P, PS, ALL
+                 options: 0, P, PS, ALL
 enid           : Structure entity ID
 N_p            : Total number of particles
 μ              : Particle-structure contact friction
@@ -4175,7 +4194,7 @@ v              : Fill fraction (typically between 0.58 and 0.62)
 
 *PARTICLE_SPH
 "Optional title"
-sid,  N_p^sbdid
+sbdid,  N_p^sbdid
 mid,  gid,  correction,  s,  dsf,  E2S,  slide,  t_end
 Δ
 ----------------------------------------------------------------
@@ -4388,7 +4407,7 @@ t_s            : Time to develop spall fracture at threshold stress
     1
     3.2e9, 5000.0
     0, 0.0
-    #end               
+#end               
 
 *PROP_DAMAGE_CL_0_45_90
 "Optional title"
@@ -5131,7 +5150,7 @@ x_n1,  ...,  x_nN
 ----------------------------------------------------------------
 Variable         Description
 coid           : Command ID
-N              : Number of data columns
+N              : Optional number of data columns
 x_11, ..., x_1N: First row of data
 .              : 
 x_n1, ..., x_nN: Last row of data

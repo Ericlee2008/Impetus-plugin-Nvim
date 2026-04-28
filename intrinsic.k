@@ -141,10 +141,10 @@ lognorminv(μ, σ, P, cap):  Log-normal distribution quantile (inverse cumulativ
                            σ is the standard deviation of the variable's natural logarithm and 0 < P < 1 is a cumulative 
                            point in the distribution (typically a random number). cap is optional and limits the deviation 
                            from μ (max number of standard deviations)
-crv(cid, x)             :  Returns the ordinate of curve cid at abscissa x. 
-fcn(fid, x)             :  Returns a curve or function value.  
+crv(cid, x)             :  Returns the ordinate of curve cid at abscissa x. cid = Curve id and x = Abscissa
+fcn(fid, x)             :  Returns a curve or function value. fid = FUNCTION id, x = Abscissa (Optioanl). 
 dfcn(fid)               :  Time derivative of fcn(fid).  
-table(tabid, rid, cid)  :  Returns the value at row and column (rid, cid) of table tabid. tabid: Table ID, rid: Row, cid: Column 
+table(tabid, rid, cid)  :  Returns the value at row and column (rid, cid) of table tabid. tabid: Table ID, rid: Row number, cid: Column number 
 path(pid, ξ, 1)         :  x-coordinate at relative position ξ along path
 path(pid, ξ, 2)         :  y-coordinate at relative position ξ along path
 path(pid, ξ, 3)         :  z-coordinate at relative position ξ along path

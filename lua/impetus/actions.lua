@@ -46,6 +46,14 @@ local function parse_option_content(text, add_item)
     return
   end
 
+  -- Guard against over-matching past a closing ] (e.g. when inline_opt
+  -- extraction consumed "[options: A, B] [default: ...]" as a whole).
+  body = body:match("^([^%]]*)") or body
+  body = trim(body)
+  if body == "" then
+    return
+  end
+
   if body:find("%-%>") then
     local pos = 1
     while true do
@@ -83,6 +91,7 @@ local function collect_directive_pairs(lines)
   local if_stack = {}
   local repeat_stack = {}
   local convert_stack = {}
+  local scope_stack = {}
 
   for row, line in ipairs(lines or {}) do
     local kind = directive_kind(line or "")
@@ -125,6 +134,19 @@ local function collect_directive_pairs(lines)
         convert_stack[#convert_stack] = nil
         pairs[#pairs + 1] = {
           family = "convert",
+          start_row = s,
+          mid_rows = {},
+          end_row = row,
+        }
+      end
+    elseif kind == "scope_start" then
+      scope_stack[#scope_stack + 1] = row
+    elseif kind == "scope_end" then
+      local s = scope_stack[#scope_stack]
+      if s then
+        scope_stack[#scope_stack] = nil
+        pairs[#pairs + 1] = {
+          family = "scope",
           start_row = s,
           mid_rows = {},
           end_row = row,
@@ -345,6 +367,12 @@ local function is_control_directive_line(line)
   if normalized:match("^~end_convert%f[%A]") then
     return true
   end
+  if normalized:match("^~begin_scope%f[%A]") then
+    return true
+  end
+  if normalized:match("^~end_scope%f[%A]") then
+    return true
+  end
   return false
 end
 
@@ -373,6 +401,12 @@ directive_kind = function(line)
   end
   if normalized:match("^~end_convert%f[%A]") then
     return "convert_end"
+  end
+  if normalized:match("^~begin_scope%f[%A]") then
+    return "scope_start"
+  end
+  if normalized:match("^~end_scope%f[%A]") then
+    return "scope_end"
   end
   return nil
 end
@@ -419,7 +453,7 @@ local function directive_block_range(lines, row)
   -- even when cursor is on ~else_if / ~else / ~end_if.
   if k == "if_start" then
     local e = matching_end_row_for_start(lines, row, "if_start", "if_end")
-    return e and row or nil, e
+    return row, e
   end
   if k == "if_mid" or k == "if_end" then
     local s = matching_start_row_for_end(lines, row, "if_end", "if_start")
@@ -432,7 +466,7 @@ local function directive_block_range(lines, row)
 
   if k == "repeat_start" then
     local e = matching_end_row_for_start(lines, row, "repeat_start", "repeat_end")
-    return e and row or nil, e
+    return row, e
   end
   if k == "repeat_end" then
     local s = matching_start_row_for_end(lines, row, "repeat_end", "repeat_start")
@@ -441,10 +475,19 @@ local function directive_block_range(lines, row)
 
   if k == "convert_start" then
     local e = matching_end_row_for_start(lines, row, "convert_start", "convert_end")
-    return e and row or nil, e
+    return row, e
   end
   if k == "convert_end" then
     local s = matching_start_row_for_end(lines, row, "convert_end", "convert_start")
+    return s, s and row or nil
+  end
+
+  if k == "scope_start" then
+    local e = matching_end_row_for_start(lines, row, "scope_start", "scope_end")
+    return row, e
+  end
+  if k == "scope_end" then
+    local s = matching_start_row_for_end(lines, row, "scope_end", "scope_start")
     return s, s and row or nil
   end
 
@@ -843,6 +886,40 @@ local function jump_to_matching_directive()
     vim.notify("No matching ~end_convert found", vim.log.levels.WARN)
     return false
   end
+
+  -- scope family
+  if kind == "scope_end" then
+    local depth = 0
+    for r = row - 1, 1, -1 do
+      local k = directive_kind(lines[r] or "")
+      if k == "scope_end" then
+        depth = depth + 1
+      elseif k == "scope_start" then
+        if depth == 0 then
+          return jump(r, active_pair_idx)
+        end
+        depth = depth - 1
+      end
+    end
+    vim.notify("No matching ~begin_scope found", vim.log.levels.WARN)
+    return false
+  end
+  if kind == "scope_start" then
+    local depth = 0
+    for r = row + 1, #lines do
+      local k = directive_kind(lines[r] or "")
+      if k == "scope_start" then
+        depth = depth + 1
+      elseif k == "scope_end" then
+        if depth == 0 then
+          return jump(r, active_pair_idx)
+        end
+        depth = depth - 1
+      end
+    end
+    vim.notify("No matching ~end_scope found", vim.log.levels.WARN)
+    return false
+  end
   return false
 end
 
@@ -878,13 +955,18 @@ local function check_directive_pairs()
       push("convert_start", i)
     elseif k == "convert_end" then
       pop_expect("convert_start", "~end_convert", i)
+    elseif k == "scope_start" then
+      push("scope_start", i)
+    elseif k == "scope_end" then
+      pop_expect("scope_start", "~end_scope", i)
     end
   end
 
   for _, it in ipairs(stack) do
     local missing = (it.kind == "if_start" and "~end_if")
       or (it.kind == "repeat_start" and "~end_repeat")
-      or "~end_convert"
+      or (it.kind == "convert_start" and "~end_convert")
+      or "~end_scope"
     problems[#problems + 1] = string.format("Line %d: missing %s", it.row, missing)
   end
 
@@ -2217,7 +2299,7 @@ collect_control_ranges = function(lines)
   local ranges = {}
   for i = 1, #lines do
     local k = directive_kind(lines[i] or "")
-    if k == "if_start" or k == "repeat_start" or k == "convert_start" then
+    if k == "if_start" or k == "repeat_start" or k == "convert_start" or k == "scope_start" then
       local s, e = directive_block_range(lines, i)
       if s and e and e >= s then
         ranges[#ranges + 1] = { s = s, e = e }
@@ -2547,11 +2629,28 @@ function M.show_ref_completion()
     end
   elseif (ctx.keyword or ""):upper() == "*UNIT_SYSTEM" and ctx.param_name == "units" then
     for _, token in ipairs({
-      "SI", "MMTONS", "MM/TON/S", "CMGUS", "CM/G/US", "IPS",
-      "MMKGMS", "MM/KG/MS", "CMGS", "CM/G/S", "MMGMS", "MM/G/MS",
-      "MMMGMS", "MM/MG/MS",
+      "SI", "MMTONS", "CMGUS", "IPS",
+      "MMKGMS", "CMGS", "MMGMS",
+      "MMMGMS",
     }) do
       add_item(token, "", "options")
+    end
+    skip_desc = true
+  elseif (ctx.keyword or ""):upper() == "*CFD_HE" and ctx.param_name == "type" then
+    for _, token in ipairs({
+      "ANFO", "C4", "COMPA", "COMPB", "HMX",
+      "LX-10-1", "LX-14-0", "M46", "MCX-6100",
+      "NSP-711", "OCTOL", "PBXN-110", "PBXN-9010",
+      "PETN", "TETRYL", "TNT",
+    }) do
+      add_item(token, "preset", "options")
+    end
+    add_item("user", "custom definition", "options")
+    local idx2 = analysis.build_buffer_index(bufnr)
+    for id, def in pairs(idx2.object_defs.material or {}) do
+      if def.keyword == "*MAT_EXPLOSIVE_JWL" then
+        add_item(id, "*MAT_EXPLOSIVE_JWL id", "object")
+      end
     end
     skip_desc = true
   end
@@ -2563,7 +2662,9 @@ function M.show_ref_completion()
     for line_part in desc:gmatch("[^\r\n]+") do
       line_part = trim(line_part)
       local inline_opt = line_part:match("[Oo]ptions:%s*(.+)$")
-      if inline_opt and inline_opt ~= "" then
+      -- Skip if the line already contains a bracketed [options: ...] to avoid
+      -- over-matching past the closing ] (e.g. "[options: A, B] [default: ...]").
+      if inline_opt and inline_opt ~= "" and not line_part:match("%%[options:") then
         parse_option_content(inline_opt, add_item)
       end
       -- Only parse standalone `lhs -> rhs` lines, not lines that contain [options: ...] or

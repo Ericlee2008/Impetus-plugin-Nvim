@@ -97,6 +97,10 @@ local function recover_existing_pane()
   return nil
 end
 
+-- Resolve the plugin root directory once so we can source our own syntax file
+-- directly (avoids loading a stale copy from an older installation on rtp).
+local plugin_root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
+
 local function ensure_help_syntax(help_buf)
   if not (help_buf and vim.api.nvim_buf_is_valid(help_buf)) then
     return
@@ -104,7 +108,8 @@ local function ensure_help_syntax(help_buf)
   vim.api.nvim_buf_call(help_buf, function()
     vim.cmd("silent! syntax clear")
     vim.cmd("silent! unlet! b:current_syntax")
-    vim.cmd("silent! runtime! syntax/impetus.vim")
+    vim.cmd("silent! source " .. vim.fn.fnameescape(plugin_root .. "/syntax/impetus.vim"))
+    vim.cmd("silent! runtime! after/syntax/impetus.vim")
   end)
   highlight.apply()
 end
@@ -254,7 +259,9 @@ local function collect_data_rows(lines, block)
   local saw_non_title = false
   for r = block.start_row + 1, block.end_row do
     local line = lines[r] or ""
-    if not is_separator_or_meta(line) then
+    local trimmed = trim(line)
+    -- Empty lines inside a keyword block are legal data rows (all defaults)
+    if trimmed == "" or not is_separator_or_meta(line) then
       if block.keyword == "*BC_MOTION" and not saw_non_title then
         local values = split_csv_outside_quotes(line)
         local first = trim(values[1] or "")
@@ -465,9 +472,16 @@ local function detect_context(buf, win)
 end
 
 local function ensure_pane(source_buf, source_win)
-  if state.suspend and not state.pane then
-    -- Recover from stale suspend state after complex window close sequences.
-    state.suspend = false
+  if state.suspend then
+    -- Recover from stale suspend state after complex window close sequences,
+    -- focus switches, or floating window events. If the help pane is still
+    -- visible, the suspend is almost certainly stale.
+    local pane = state.pane or recover_existing_pane()
+    if pane and pane.win and vim.api.nvim_win_is_valid(pane.win) then
+      state.suspend = false
+    elseif not state.pane then
+      state.suspend = false
+    end
   end
   if state.suspend then
     return nil
@@ -554,7 +568,7 @@ local function apply_static_highlights(help_buf)
     if line:match("^%s*%d*%.?%s*%*[%w_%-]+") then
       vim.api.nvim_buf_add_highlight(help_buf, state.ns_static, "impetusKeyword", lnum, 0, -1)
     end
-    if line == '"Optional title"' then
+    if line:match('^".*"$') then
       vim.api.nvim_buf_add_highlight(help_buf, state.ns_static, "impetusString", lnum, 0, -1)
     end
     if line:match("^%-+$") then
@@ -894,7 +908,14 @@ function M.setup()
         return
       end
       if state.suspend then
-        return
+        -- If the help pane is still visible, the suspend is likely stale
+        -- (e.g. after focus switch or transient window close). Recover.
+        local pane = state.pane or recover_existing_pane()
+        if pane and pane.win and vim.api.nvim_win_is_valid(pane.win) then
+          state.suspend = false
+        else
+          return
+        end
       end
       if vim.g.impetus_fast_nav == 1 then
         return
@@ -925,19 +946,35 @@ function M.setup()
     end,
   })
 
+  local function is_floating_window(win)
+    local ok, cfg = pcall(vim.api.nvim_win_get_config, win)
+    if not ok or not cfg then
+      return false
+    end
+    return cfg.relative ~= nil and cfg.relative ~= ""
+  end
+
   vim.api.nvim_create_autocmd("WinClosed", {
     group = group,
     callback = function(ev)
       state.suspend = true
       local pane = state.pane
-      if not pane then
+      local closed_win = tonumber(ev.match)
+      if not closed_win then
         vim.schedule(function()
           state.suspend = false
         end)
         return
       end
-      local closed_win = tonumber(ev.match)
-      if not closed_win then
+      -- Ignore floating windows (e.g. intrinsic hover popups); they should not
+      -- affect the side-help pane lifecycle.
+      if is_floating_window(closed_win) then
+        vim.schedule(function()
+          state.suspend = false
+        end)
+        return
+      end
+      if not pane then
         vim.schedule(function()
           state.suspend = false
         end)
@@ -980,6 +1017,18 @@ function M.setup()
       else
         vim.schedule(function()
           state.suspend = false
+          -- If the closed window was the active source window, switch focus back
+          -- to the main window so the help pane stays in sync.
+          if pane and pane.source_win == closed_win then
+            local main = pane.main_win
+            if main and vim.api.nvim_win_is_valid(main) then
+              pcall(vim.api.nvim_set_current_win, main)
+              local main_buf = vim.api.nvim_win_get_buf(main)
+              if main_buf and vim.api.nvim_buf_is_valid(main_buf) then
+                M.render(main_buf, main)
+              end
+            end
+          end
         end)
       end
     end,
@@ -997,6 +1046,15 @@ function M.setup()
         pcall(vim.api.nvim_win_close, pane.win, true)
       end
       state.pane = nil
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("FocusGained", {
+    group = group,
+    callback = function()
+      if state.suspend and state.pane and state.pane.win and vim.api.nvim_win_is_valid(state.pane.win) then
+        state.suspend = false
+      end
     end,
   })
 end

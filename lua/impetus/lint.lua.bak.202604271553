@@ -112,7 +112,7 @@ local function is_int_token(v)
 end
 
 local function normalize_param_name(s)
-  return (trim(s or ""):gsub("^%%", ""):gsub("^%[", ""):gsub("%]$", ""))
+  return (trim(s or ""):gsub("^%%", ""):gsub("^%[", ""):gsub("%]$", "")):lower()
 end
 
 local function resolve_param_value(name, idx)
@@ -345,18 +345,6 @@ local function extract_options_from_desc(desc)
   end
   d = d:lower()
 
-  -- Range expression like "1 leq VAR leq 99" or "1 <= VAR <= 99"
-  local lo, hi = d:match("(%d+)%s*leq%s*[%w_]+%s*leq%s*(%d+)")
-  if not lo then
-    lo, hi = d:match("(%d+)%s*<=%s*[%w_]+%s*<=%s*(%d+)")
-  end
-  if lo and hi then
-    local opts = {}
-    opts["__ge__"] = tonumber(lo)
-    opts["__le__"] = tonumber(hi)
-    return opts
-  end
-
   local opts = {}
 
   -- Pattern 1: [options: a, b, c] or options: a, b, c (single line)
@@ -551,42 +539,11 @@ end
 local function check_unused_params(ctx, diagnostics)
   local idx = ctx.idx
   local cross = ctx.cross_file_params
-  local lines = ctx.lines
-
-  -- Pre-compute *OBJECT block ranges
-  local object_ranges = {}
-  local i = 1
-  while i <= #lines do
-    local kw = trim(lines[i] or ""):match("^(%*[%u%d_%-]+)")
-    if kw and kw:upper() == "*OBJECT" then
-      local start_i = i
-      local end_i = #lines
-      for j = i + 1, #lines do
-        if trim(lines[j] or ""):match("^(%*[%u%d_%-]+)") then
-          end_i = j - 1
-          break
-        end
-      end
-      object_ranges[#object_ranges + 1] = { start = start_i, finish = end_i }
-      i = end_i
-    end
-    i = i + 1
-  end
-
-  local function inside_object(row)
-    for _, r in ipairs(object_ranges) do
-      if row > r.start and row <= r.finish then
-        return true
-      end
-    end
-    return false
-  end
-
   for name, defs in pairs(idx.params.defs or {}) do
     local used = cross and cross.refs[name] and #cross.refs[name] > 0
     if not used then
       local first = defs[1]
-      if first and not inside_object(first.row) then
+      if first then
         push_diagnostic(
           diagnostics,
           (first.row or 1) - 1,
@@ -611,24 +568,14 @@ local function check_duplicate_ids(ctx, diagnostics)
     if k:match("^%*MAT_") then return "material" end
     if k:match("^%*SET_") then return "set" end
     if k:match("^%*GEOMETRY") then return "geometry" end
-    if k == "*PART" or k:match("^%*PART_") then return "part" end
-    if k == "*CURVE" or k == "*FUNCTION" then return "curve" end
-    if k == "*NODE" then return "node" end
-    if k:match("^%*ELEMENT") then return "element" end
-    if k:match("^%*COORDINATE_SYSTEM") then return "coordinate_system" end
     if k == "*BC_MOTION" then return "bc_motion" end
-    if k:match("^%*LOAD_") then return k:sub(2) end
-    if k:match("^%*CFD_") then return k:sub(2) end
+    if k:match("^%*LOAD_") then return "load" end
     if k:match("^%*CONTACT_") then return "contact" end
     if k:match("^%*CONNECTOR_") then return "connector" end
     if k:match("^%*COMPONENT_") then return "component" end
     if k == "*OUTPUT_USER" then return "command" end
-    if k:match("^%*PARTICLE_") then return k:sub(2) end
-    if k == "*PROP_DAMAGE_CL" or k == "*PROP_DAMAGE_JC" then return "prop_damage" end
-    if k == "*PROP_THERMAL" then return "prop_thermal" end
-    if k:match("^%*EOS") then return "eos" end
-    if k == "*TABLE" then return "table" end
-    if k == "*PATH" then return "path" end
+    if k:match("^%*CFD_") then return "cfd" end
+    if k:match("^%*PARTICLE_") or k:match("SPH") then return "particle" end
     return nil
   end
 
@@ -838,11 +785,7 @@ local function check_required_fields(ctx, diagnostics)
         -- Special per-keyword-family handling
         -- =====================================================================
 
-        if kw_upper == "*END" then
-          -- *END terminates the input; solver ignores all trailing content.
-          -- Do not run required-field checks on lines after *END.
-
-        elseif kw_upper == "*PARAMETER" or kw_upper == "*PARAMETER_DEFAULT" then
+        if kw_upper == "*PARAMETER" or kw_upper == "*PARAMETER_DEFAULT" then
           -- Only %param = expression is required; description/rid/quantity are optional
           -- Parameter name may or may not have a leading %
           if #data_rows > 0 then
@@ -988,13 +931,6 @@ local function check_required_fields(ctx, diagnostics)
               else
                 local param_desc = find_desc_for_param(desc, param_name)
                 local is_optional = description_marks_optional(param_desc)
-                -- If entype is empty or 0, enid is optional (no structure interaction)
-                if p == "enid" then
-                  local entype_val = trim(fields[1] or "")
-                  if entype_val == "" or entype_val == "0" then
-                    is_optional = true
-                  end
-                end
                 local has_options = extract_options_from_desc(param_desc) ~= nil
                 -- If previous field is ALL, current enid/eid field is optional
                 local prev_val = fi > 1 and trim(fields[fi - 1] or "") or ""
@@ -1030,10 +966,15 @@ local function check_required_fields(ctx, diagnostics)
                 local has_options = extract_options_from_desc(param_desc) ~= nil
                 local prev_val = fi > 1 and trim(fields[fi - 1] or "") or ""
                 local is_all_entity_id = (p:match("^enid") or p:match("^eid")) and prev_val:upper() == "ALL"
-                -- R is required only when pid == "DP"
+                -- R is required only if there is no *CFD but there is *PARTICLE_*
                 if p == "r" then
-                  local pid_val = trim(fields[2] or ""):upper()
-                  is_optional = (pid_val ~= "DP")
+                  if ctx.has_cfd then
+                    is_optional = true
+                  elseif ctx.has_particle then
+                    is_optional = false
+                  else
+                    is_optional = true
+                  end
                 end
                 if not is_optional and not has_options and not is_all_entity_id then
                   local val = trim(fields[fi] or "")
@@ -1046,35 +987,6 @@ local function check_required_fields(ctx, diagnostics)
                       "Missing required field '" .. param_name .. "' in " .. kw
                     )
                   end
-                end
-              end
-            end
-          end
-
-          -- When pid == "DP", R (field 6) must be present and positive
-          for _, dr in ipairs(data_rows) do
-            local fields = split_csv_keep_empty(lines[dr])
-            local pid = trim(fields[2] or ""):upper()
-            if pid == "DP" then
-              local r_val = trim(fields[6] or "")
-              if r_val == "" or r_val == "-" then
-                push_diagnostic(
-                  diagnostics,
-                  dr - 1,
-                  0,
-                  SEV.ERROR,
-                  "Missing required field 'R' (sensor sampling radius) in *OUTPUT_SENSOR when pid=DP"
-                )
-              else
-                local r_num = to_number(r_val)
-                if r_num and r_num <= 0 then
-                  push_diagnostic(
-                    diagnostics,
-                    dr - 1,
-                    field_col_from_idx(lines[dr], 6),
-                    SEV.ERROR,
-                    "Field 'R' (sensor sampling radius) must be positive when pid=DP in *OUTPUT_SENSOR"
-                  )
                 end
               end
             end
@@ -1220,37 +1132,6 @@ local function check_required_fields(ctx, diagnostics)
             end
           end
 
-        elseif kw_upper == "*INITIAL_STRESS_FUNCTION" then
-          -- Row 1: entype, enid are required; fid_xx~fid_zx are optional (default: 0)
-          if #data_rows > 0 then
-            local sig = entry.signature_rows[1] or {}
-            local desc = entry.descriptions or {}
-            local fields = split_csv_keep_empty(lines[data_rows[1]])
-            for fi, param_name in ipairs(sig) do
-              local p = normalize_param_name(param_name)
-              if p ~= "" and p ~= "." and p ~= "..." and p ~= "-" then
-                local is_optional = (fi >= 3)
-                if not is_optional then
-                  local param_desc = find_desc_for_param(desc, param_name)
-                  is_optional = description_marks_optional(param_desc)
-                end
-                local has_options = extract_options_from_desc(find_desc_for_param(desc, param_name)) ~= nil
-                if not is_optional and not has_options then
-                  local val = trim(fields[fi] or "")
-                  if val == "" or val == "-" then
-                    push_diagnostic(
-                      diagnostics,
-                      data_rows[1] - 1,
-                      0,
-                      SEV.ERROR,
-                      "Missing required field '" .. param_name .. "' in " .. kw
-                    )
-                  end
-                end
-              end
-            end
-          end
-
         else
           -- Generic check for all other keywords
           if #data_rows > 0 then
@@ -1350,8 +1231,8 @@ local function check_physics_sanity(ctx, diagnostics)
     end
 
     local fname = field_name:lower()
-    -- Density (ρ is the Greek letter rho used in commands.help)
-    if fname == "rho" or fname == "density" or fname == "ρ" then
+    -- Density
+    if fname == "rho" or fname == "density" then
       local r = ranges.rho
       if r then
         if num < r.suspicion_below then
@@ -1612,10 +1493,7 @@ local function check_physics_sanity(ctx, diagnostics)
                 local val = fields[fi] or ""
                 local pn = normalize_param_name(param_name)
                 -- Only run physics checks on coordinate/velocity/mass fields for non-material keywords
-                -- Skip *CURVE/*TABLE as well: their x/y are data points (e.g. stress vs strain),
-                -- not spatial coordinates.
-                if not kw_upper:match("^%*MAT_") and not (kw_upper == "*MAT_OBJECT")
-                   and kw_upper ~= "*CURVE" and kw_upper ~= "*TABLE" then
+                if not kw_upper:match("^%*MAT_") and not (kw_upper == "*MAT_OBJECT") then
                   if pn:match("^[xyz]_[%w_]*$") or pn == "x" or pn == "y" or pn == "z"
                     or pn:match("^v[xyz]?$") or pn:match("^velo") or pn:match("^velocity")
                     or pn == "m" or pn == "mass" then
@@ -1753,15 +1631,11 @@ local function check_enum_values(ctx, diagnostics)
                       if not is_valid then
                         -- Also try numeric match (e.g. user wrote 1 instead of "1")
                         local num = tonumber(val)
-                        if num then
-                          local in_range = true
-                          if opts.__gt__ and num <= opts.__gt__ then in_range = false end
-                          if opts.__ge__ and num < opts.__ge__ then in_range = false end
-                          if opts.__lt__ and num >= opts.__lt__ then in_range = false end
-                          if opts.__le__ and num > opts.__le__ then in_range = false end
-                          if in_range then
-                            is_valid = true
-                          end
+                        if num and opts.__gt__ and num > opts.__gt__ then
+                          is_valid = true
+                        end
+                        if num and opts.__ge__ and num >= opts.__ge__ then
+                          is_valid = true
                         end
                         if not is_valid then
                           if not num or not opts[tostring(num)] then

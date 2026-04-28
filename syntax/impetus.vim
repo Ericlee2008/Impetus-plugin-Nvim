@@ -1,11 +1,8 @@
-if exists("b:current_syntax")
-  finish
-endif
-
 syntax match impetusKeyword /^\s*\(\d\+\.\s*\)\?\*[A-Za-z0-9_-]\+/
-syntax match impetusControlStart /^\s*\~\(if\|repeat\|convert_from_[A-Za-z0-9_]*\)\>/
+
+syntax match impetusControlStart /^\s*\~\(if\|repeat\|convert_from_[A-Za-z0-9_]*\|begin_scope\)\>/
 syntax match impetusControlMid /^\s*\~\(else_if\|else\)\>/
-syntax match impetusControlEnd /^\s*\~\(end_if\|end_repeat\|end_convert\)\>/
+syntax match impetusControlEnd /^\s*\~\(end_if\|end_repeat\|end_convert\|end_scope\)\>/
 syntax match impetusParam /\[%\h\w*\]/
 syntax match impetusParam /%\h\w*/
 syntax match impetusRepeatVar /\v\[r[0-9]+\]/
@@ -24,12 +21,21 @@ syntax match impetusFieldName /^\s*[[:alnum:]_%%\[\]]\+\s*:\s*/ contains=impetus
 
 " Intrinsic categories (injected by Lua from intrinsic.k):
 " impetusIntrinsicFunction / impetusIntrinsicVariable / impetusIntrinsicSymbol
+" Hard-code common intrinsic variables so they always highlight even if
+" intrinsic.k dynamic injection fails.
+" Use explicit alnum boundary (not \< \>) because the user may extend
+" iskeyword to include '-' for keywords like *change_p-order.
+for s:var in ['pi', 'dt', 't', 'term', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'xnorm', 'ynorm', 'znorm']
+  execute 'syntax match impetusIntrinsicVariable /\%([[:alnum:]_]\)\@<!' . s:var . '\%([[:alnum:]_]\)\@!/' 
+endfor
+unlet s:var
 
 highlight default link impetusKeyword Keyword
+highlight default link impetusDirective PreProc
+
 highlight default link impetusControlStart PreProc
 highlight default link impetusControlMid Special
 highlight default link impetusControlEnd Statement
-highlight default link impetusDirective PreProc
 highlight default link impetusParam Identifier
 highlight default link impetusRepeatVar Special
 highlight default link impetusNumber Number

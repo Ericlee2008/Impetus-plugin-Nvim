@@ -124,6 +124,43 @@ local function parse()
   return cache
 end
 
+-- Namespace for context-sensitive intrinsic highlights (e.g. D/V/A in *BC_MOTION).
+local bc_motion_ns = vim.api.nvim_create_namespace("impetus_bc_motion_intrinsics")
+
+-- Highlight D/V/A only inside *BC_MOTION blocks.
+local function highlight_bc_motion_vars(bufnr, vars)
+  pcall(vim.api.nvim_buf_clear_namespace, bufnr, bc_motion_ns, 0, -1)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local in_block = false
+  local block_end = 0
+  for i, line in ipairs(lines) do
+    local kw = line:match("^%s*(%*[%w_%-]+)")
+    if kw then
+      in_block = (kw:upper() == "*BC_MOTION")
+      block_end = 0
+    elseif in_block then
+      -- Determine block end heuristically: next blank line or next keyword-like line
+      if line:match("^%s*$") or line:match("^%s*#") or line:match("^%s*$") then
+        in_block = false
+      else
+        block_end = i
+      end
+    end
+    if in_block then
+      for _, var in ipairs(vars) do
+        local esc = vim.pesc(var)
+        local pos = 1
+        while pos <= #line do
+          local s, e = line:find("%f[%a]" .. esc .. "%f[%A]", pos)
+          if not s then break end
+          pcall(vim.api.nvim_buf_add_highlight, bufnr, bc_motion_ns, "impetusIntrinsicVariable", i - 1, s - 1, e)
+          pos = e + 1
+        end
+      end
+    end
+  end
+end
+
 function M.apply_syntax_for_current_buffer()
   local ft = vim.bo.filetype
   if ft ~= "impetus" and ft ~= "kwt" then
@@ -137,40 +174,71 @@ function M.apply_syntax_for_current_buffer()
     return
   end
 
-  vim.cmd("silent! syntax clear impetusIntrinsicFunction")
-  vim.cmd("silent! syntax clear impetusIntrinsicVariable")
-  vim.cmd("silent! syntax clear impetusIntrinsicSymbol")
-
-  if #d.funcs > 0 then
-    for _, fn in ipairs(d.funcs) do
-      vim.cmd("silent! syntax match impetusIntrinsicFunction /\\c\\<" .. vim.pesc(fn) .. "\\>\\ze\\s*(/ containedin=ALLBUT,impetusComment,impetusString")
+  -- Only clear a group when we actually have new rules to apply.
+  -- This preserves the hard-coded fallback keywords in syntax/impetus.vim
+  -- when intrinsic.k cannot be resolved (path/cache issues).
+  local has_funcs = #d.funcs > 0
+  local global_vars = {}
+  local bc_motion_vars = {}
+  for _, var in ipairs(d.vars or {}) do
+    if var == "D" or var == "V" or var == "A" then
+      table.insert(bc_motion_vars, var)
+    else
+      table.insert(global_vars, var)
     end
   end
-  if #d.vars > 0 then
-    for _, var in ipairs(d.vars) do
-      vim.cmd("silent! syntax match impetusIntrinsicVariable /\\c\\<" .. vim.pesc(var) .. "\\>/ containedin=ALLBUT,impetusComment,impetusString")
-    end
-  end
+  local has_vars = #global_vars > 0
   local symbols = d.symbols or { ops = {}, words = {} }
   local sym_words = symbols.words or {}
   local sym_ops = symbols.ops or {}
+  local has_sym_words = #sym_words > 0
+  local has_sym_ops = #sym_ops > 0
 
-  if #sym_words > 0 then
-    for _, word in ipairs(sym_words) do
-      vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\c\\<" .. vim.pesc(word) .. "\\>/ containedin=ALLBUT,impetusComment,impetusString")
+  if has_funcs then
+    vim.cmd("silent! syntax clear impetusIntrinsicFunction")
+    for _, fn in ipairs(d.funcs) do
+      -- Functions: case-insensitive (Impetus functions are typically case-insensitive)
+      vim.cmd("silent! syntax match impetusIntrinsicFunction /\\c\\<" .. vim.pesc(fn) .. "\\>\\ze\\s*(/")
     end
   end
-  if #sym_ops > 0 then
-    for _, op in ipairs(sym_ops) do
-      if op == "*" then
-        vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\zs\\*\\ze\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
-        vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\s\\zs\\*\\ze\\s\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
-      elseif op == "-" then
-        vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\s\\zs-\\ze\\s\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
-        vim.cmd("silent! syntax match impetusIntrinsicSymbol /[%)%]%w]\\zs-\\ze[%[(%w]/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
-      else
-        local lit = (op:gsub("\\", "\\\\"):gsub("/", "\\/"))
-        vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\V" .. lit .. "/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
+
+  -- Inject variables via syntax match with explicit alnum boundary.
+  -- We cannot rely on \< \> because user's iskeyword may include '-' (needed
+  -- for keywords like *change_p-order), which makes x-0.05 a single word.
+  if has_vars then
+    local added = {}
+    for _, var in ipairs(global_vars) do
+      if not added[var] then
+        added[var] = true
+        vim.cmd("silent! syntax match impetusIntrinsicVariable /\\%([[alnum:]_]\\)\\@<!" .. vim.pesc(var) .. "\\%([[alnum:]_]\\)\\@!/")
+      end
+    end
+  end
+
+  if #bc_motion_vars > 0 then
+    highlight_bc_motion_vars(vim.api.nvim_get_current_buf(), bc_motion_vars)
+  end
+
+  if has_sym_words or has_sym_ops then
+    vim.cmd("silent! syntax clear impetusIntrinsicSymbol")
+    if has_sym_words then
+      for _, word in ipairs(sym_words) do
+        -- Symbols: case-sensitive (e.g. SC_jet is not the same as sc_jet in all contexts)
+        vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\<" .. vim.pesc(word) .. "\\>/")
+      end
+    end
+    if has_sym_ops then
+      for _, op in ipairs(sym_ops) do
+        if op == "*" then
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\zs\\*\\ze\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\s\\zs\\*\\ze\\s\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
+        elseif op == "-" then
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\s\\zs-\\ze\\s\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /[%)%]%w]\\zs-\\ze[%[(%w]/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
+        else
+          local lit = (op:gsub("\\", "\\\\"):gsub("/", "\\/"))
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\V" .. lit .. "/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
+        end
       end
     end
   end
