@@ -2,11 +2,11 @@
 impetus_nvim.log
 
 # Temporary / generated scripts
-_fix_pattern.py
-_test_pattern.lua
+_fix_*
+tmp_*
+*_test.lua
 check_schema.lua
 _kwlist.txt
-test_partial_*.lua
 
 # Test files
 test_*.k
