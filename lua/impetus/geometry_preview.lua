@@ -1,7 +1,11 @@
 local config = require("impetus.config")
+local analysis = require("impetus.analysis")
 
 local M = {}
 
+-- =====================================================================
+-- Basic string helpers
+-- =====================================================================
 local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
@@ -15,6 +19,68 @@ local function parse_keyword(line)
   return normalized:match("^(%*[%w_%-]+)")
 end
 
+-- =====================================================================
+-- Parameter resolution
+-- =====================================================================
+local function normalize_param_name(s)
+  return ((s or ""):gsub("^%%", ""):gsub("^%[", ""):gsub("%]$", ""))
+end
+
+local function to_number(s)
+  local t = trim(s or "")
+  if t == "" then return nil end
+  local n = tonumber(t)
+  if n then return n end
+  if t:match("^0[xX]%x+$") then return tonumber(t, 16) end
+  return nil
+end
+
+local function resolve_param_value(name, all_defs)
+  local key = normalize_param_name(name)
+  local defs = all_defs and (all_defs[key] or all_defs[key:lower()])
+  if not defs or #defs == 0 then
+    return nil
+  end
+  local line = defs[1].line or ""
+  -- Extract value from "name = value, "desc"" or "name, value, "desc""
+  local value = line:match("=%s*([^,]+)")
+  if not value then
+    value = line:match(",%s*([^,]+)")
+  end
+  if value then
+    value = trim(value)
+    local num = to_number(value)
+    if num then return num end
+    local ref_name = value:match("^%%([%a_][%w_]*)$") or value:match("^%[%%([%a_][%w_]*)%]$")
+    if ref_name then
+      return resolve_param_value(ref_name, all_defs)
+    end
+  end
+  return nil
+end
+
+local function extract_values(line, all_defs)
+  local out = {}
+  for token in (line or ""):gmatch("[^,%s]+") do
+    local num = to_number(token)
+    if num then
+      out[#out + 1] = num
+    else
+      local name = token:match("^%%([%a_][%w_]*)$") or token:match("^%[%%([%a_][%w_]*)%]$")
+      if name then
+        local val = resolve_param_value(name, all_defs)
+        if val then
+          out[#out + 1] = val
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- =====================================================================
+-- Block finding
+-- =====================================================================
 local function find_block(lines, row)
   local start_row, keyword = nil, nil
   for r = row, 1, -1 do
@@ -40,108 +106,274 @@ end
 
 local function is_meta_line(line)
   local normalized = trim(strip_number_prefix(line or ""))
-  if normalized == "" then
-    return true
-  end
-  if normalized:sub(1, 1) == "#" or normalized:sub(1, 1) == "$" then
-    return true
-  end
-  if normalized:sub(1, 1) == "~" then
-    return true
-  end
-  if normalized:match("^%-+$") then
-    return true
-  end
-  if normalized == "Variable         Description" then
-    return true
-  end
-  if normalized == '"Optional title"' or normalized:match('^".*"$') then
-    return true
-  end
+  if normalized == "" then return true end
+  if normalized:sub(1, 1) == "#" or normalized:sub(1, 1) == "$" then return true end
+  if normalized:sub(1, 1) == "~" then return true end
+  if normalized:match("^%-+$") then return true end
+  if normalized == "Variable         Description" then return true end
+  if normalized == '"Optional title"' or normalized:match('^".*"$') then return true end
   return false
 end
 
-local function extract_numbers(line)
+local function get_data_lines(block_lines)
   local out = {}
-  for token in (line or ""):gmatch("[^,%s]+") do
-    local n = token:match("^[-+]?%d*%.?%d+[eE][-+]?%d+$")
-    if not n then
-      n = token:match("^[-+]?%d*%.?%d+$")
-    end
-    if n then
-      out[#out + 1] = tonumber(n)
+  for _, line in ipairs(block_lines) do
+    if not is_meta_line(line) then
+      out[#out + 1] = line
     end
   end
   return out
 end
 
-local function flatten_points(lines)
-  local points = {}
-  local scalars = {}
-  local raw_numbers = {}
-  for _, line in ipairs(lines or {}) do
-    if not is_meta_line(line) then
-      local nums = extract_numbers(line)
-      for _, n in ipairs(nums) do
-        raw_numbers[#raw_numbers + 1] = n
+-- =====================================================================
+-- Coordinate system lookup
+-- =====================================================================
+local function find_coordinate_system(lines, cid)
+  if not cid or cid == 0 then return nil end
+  local in_block = false
+  local block_lines = {}
+  for _, line in ipairs(lines) do
+    local t = trim(line)
+    if t:match("^%*COORDINATE_SYSTEM") then
+      in_block = true
+      block_lines = {}
+    elseif t:match("^%*") and in_block then
+      in_block = false
+      if #block_lines > 0 then
+        local nums = {}
+        for token in block_lines[1]:gmatch("[^,%s]+") do
+          local n = to_number(token)
+          if n then nums[#nums + 1] = n end
+        end
+        if nums[1] == cid then
+          return block_lines
+        end
       end
-      if #nums == 1 then
-        scalars[#scalars + 1] = nums[1]
-      end
-      local i = 1
-      while i + 2 <= #nums do
-        points[#points + 1] = { nums[i], nums[i + 1], nums[i + 2] }
-        i = i + 3
-      end
+    elseif in_block then
+      block_lines[#block_lines + 1] = line
     end
   end
-  return points, scalars, raw_numbers
-end
-
-local function find_last_value_line(lines)
-  for i = #lines, 1, -1 do
-    local line = lines[i] or ""
-    if not is_meta_line(line) then
-      local nums = extract_numbers(line)
-      if #nums > 0 then
-        return nums, line
-      end
+  if in_block and #block_lines > 0 then
+    local nums = {}
+    for token in block_lines[1]:gmatch("[^,%s]+") do
+      local n = to_number(token)
+      if n then nums[#nums + 1] = n end
     end
-  end
-  return nil, nil
-end
-
-local function find_first_value_line(lines)
-  for i = 1, #lines do
-    local line = lines[i] or ""
-    if not is_meta_line(line) then
-      local nums = extract_numbers(line)
-      if #nums > 0 then
-        return nums, line
-      end
+    if nums[1] == cid then
+      return block_lines
     end
-  end
-  return nil, nil
-end
-
-local function shape_from_keyword(keyword, lines)
-  local k = (keyword or ""):lower()
-  if k:find("sphere", 1, true) then
-    return "sphere"
-  end
-  if k:find("cyl", 1, true) then
-    return "cylinder"
-  end
-  if k:find("box", 1, true) then
-    return "box"
-  end
-  local first = trim(strip_number_prefix(lines[1] or "")):lower()
-  if first == "box" or first == "sphere" or first == "cylinder" then
-    return first
   end
   return nil
 end
 
+-- =====================================================================
+-- Shape detection
+-- =====================================================================
+local function shape_from_keyword(keyword)
+  local k = (keyword or ""):lower()
+  if k:find("sphere", 1, true) then return "sphere" end
+  if k:find("cyl", 1, true) then return "cylinder" end
+  if k:find("box", 1, true) then return "box" end
+  if k:find("ellip", 1, true) then return "ellipsoid" end
+  if k:find("pipe", 1, true) then return "pipe" end
+  if k:find("efp", 1, true) then return "efp" end
+  return nil
+end
+
+-- =====================================================================
+-- Payload builders per keyword
+-- =====================================================================
+local function build_component_box_payload(kw, block_lines, all_defs, buf_lines)
+  local data_lines = get_data_lines(block_lines)
+  if #data_lines < 2 then
+    return nil, "*COMPONENT_BOX needs at least 2 data rows"
+  end
+  local first_vals = extract_values(data_lines[1], all_defs)
+  local second_vals = extract_values(data_lines[2], all_defs)
+  if not first_vals or #first_vals < 5 then
+    return nil, "*COMPONENT_BOX row 1 needs at least 5 values"
+  end
+  if not second_vals or #second_vals < 6 then
+    return nil, "*COMPONENT_BOX row 2 needs at least 6 values"
+  end
+  local split_x = math.max(1, math.floor(first_vals[3] or 1))
+  local split_y = math.max(1, math.floor(first_vals[4] or 1))
+  local split_z = math.max(1, math.floor(first_vals[5] or 1))
+  local cid = first_vals[6]
+  local points = {
+    { second_vals[1], second_vals[2], second_vals[3] },
+    { second_vals[4], second_vals[5], second_vals[6] },
+  }
+  local payload = {
+    keyword = kw,
+    shape = "box",
+    points = points,
+    numbers = { second_vals[1], second_vals[2], second_vals[3], second_vals[4], second_vals[5], second_vals[6] },
+    splits = { split_x, split_y, split_z },
+    coordinate_system = cid,
+  }
+  if cid and cid ~= 0 and buf_lines then
+    local cs_lines = find_coordinate_system(buf_lines, cid)
+    if cs_lines then
+      local cs_vals = {}
+      for _, line in ipairs(cs_lines) do
+        local vals = extract_values(line, all_defs)
+        for _, v in ipairs(vals) do
+          cs_vals[#cs_vals + 1] = v
+        end
+      end
+      payload.coordinate_system_lines = cs_lines
+      payload.coordinate_system_values = cs_vals
+    end
+  end
+  return payload
+end
+
+local function build_component_sphere_payload(kw, block_lines, all_defs)
+  local data_lines = get_data_lines(block_lines)
+  if #data_lines < 2 then
+    return nil, "*COMPONENT_SPHERE needs at least 2 data rows"
+  end
+  local second_vals = extract_values(data_lines[2], all_defs)
+  if not second_vals or #second_vals < 4 then
+    return nil, "*COMPONENT_SPHERE row 2 needs at least 4 values"
+  end
+  local points = { { second_vals[1], second_vals[2], second_vals[3] } }
+  return {
+    keyword = kw,
+    shape = "sphere",
+    points = points,
+    numbers = second_vals,
+    scalars = { second_vals[4] },
+  }
+end
+
+local function build_component_cylinder_payload(kw, block_lines, all_defs)
+  local data_lines = get_data_lines(block_lines)
+  if #data_lines < 2 then
+    return nil, "*COMPONENT_CYLINDER needs at least 2 data rows"
+  end
+  local second_vals = extract_values(data_lines[2], all_defs)
+  if not second_vals or #second_vals < 8 then
+    return nil, "*COMPONENT_CYLINDER row 2 needs at least 8 values"
+  end
+  local points = {
+    { second_vals[1], second_vals[2], second_vals[3] },
+    { second_vals[4], second_vals[5], second_vals[6] },
+  }
+  return {
+    keyword = kw,
+    shape = "cylinder",
+    points = points,
+    numbers = second_vals,
+    scalars = { second_vals[7] },
+  }
+end
+
+local function build_geometry_box_payload(kw, block_lines, all_defs)
+  local data_lines = get_data_lines(block_lines)
+  if #data_lines < 2 then
+    return nil, kw .. " needs at least 2 data rows"
+  end
+  local second_vals = extract_values(data_lines[2], all_defs)
+  if not second_vals or #second_vals < 5 then
+    return nil, kw .. " row 2 needs at least 5 values"
+  end
+  local points = {
+    { second_vals[1], second_vals[2], second_vals[3] },
+    { second_vals[4], second_vals[5], second_vals[6] or second_vals[5] },
+  }
+  return {
+    keyword = kw,
+    shape = "box",
+    points = points,
+    numbers = second_vals,
+  }
+end
+
+local function build_geometry_sphere_payload(kw, block_lines, all_defs)
+  local data_lines = get_data_lines(block_lines)
+  if #data_lines < 2 then
+    return nil, kw .. " needs at least 2 data rows"
+  end
+  local second_vals = extract_values(data_lines[2], all_defs)
+  if not second_vals or #second_vals < 4 then
+    return nil, kw .. " row 2 needs at least 4 values"
+  end
+  local points = { { second_vals[1], second_vals[2], second_vals[3] } }
+  return {
+    keyword = kw,
+    shape = "sphere",
+    points = points,
+    numbers = second_vals,
+    scalars = { second_vals[4] },
+  }
+end
+
+local function build_geometry_pipe_payload(kw, block_lines, all_defs)
+  local data_lines = get_data_lines(block_lines)
+  if #data_lines < 3 then
+    return nil, "*GEOMETRY_PIPE needs at least 3 data rows"
+  end
+  local second_vals = extract_values(data_lines[2], all_defs)
+  local third_vals = extract_values(data_lines[3], all_defs)
+  if not second_vals or #second_vals < 8 then
+    return nil, "*GEOMETRY_PIPE row 2 needs at least 8 values"
+  end
+  if not third_vals or #third_vals < 6 then
+    return nil, "*GEOMETRY_PIPE row 3 needs at least 6 values"
+  end
+  local all = {}
+  for _, v in ipairs(second_vals) do all[#all + 1] = v end
+  for _, v in ipairs(third_vals) do all[#all + 1] = v end
+  return {
+    keyword = kw,
+    shape = "cylinder",
+    points = {
+      { second_vals[1], second_vals[2], second_vals[3] },
+      { second_vals[4], second_vals[5], second_vals[6] },
+    },
+    numbers = all,
+    scalars = { second_vals[7] },
+  }
+end
+
+local function build_generic_payload(kw, block_lines, all_defs)
+  local shape = shape_from_keyword(kw)
+  if not shape then
+    return nil, "could not infer geometry shape from '" .. kw .. "'"
+  end
+  local points = {}
+  local scalars = {}
+  local numbers = {}
+  for _, line in ipairs(block_lines) do
+    if not is_meta_line(line) then
+      local vals = extract_values(line, all_defs)
+      for _, v in ipairs(vals) do
+        numbers[#numbers + 1] = v
+      end
+      if #vals == 1 then
+        scalars[#scalars + 1] = vals[1]
+      end
+      local i = 1
+      while i + 2 <= #vals do
+        points[#points + 1] = { vals[i], vals[i + 1], vals[i + 2] }
+        i = i + 3
+      end
+    end
+  end
+  return {
+    keyword = kw,
+    shape = shape,
+    points = points,
+    scalars = scalars,
+    numbers = numbers,
+  }
+end
+
+-- =====================================================================
+-- Main payload builder
+-- =====================================================================
 local function build_payload(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local row = vim.api.nvim_win_get_cursor(0)[1]
@@ -156,51 +388,46 @@ local function build_payload(bufnr)
     block_lines[#block_lines + 1] = lines[r] or ""
   end
 
-  local shape = shape_from_keyword(block.keyword, block_lines)
-  if not shape then
-    return nil, "could not infer geometry shape from '" .. block.keyword .. "'"
+  -- Build parameter index for resolving %param / [%param] references
+  local param_idx = analysis.build_cross_file_param_index(bufnr)
+  local all_defs = param_idx.defs or {}
+
+  local kw = (block.keyword or ""):upper()
+  local payload, err
+
+  if kw == "*COMPONENT_BOX" then
+    payload, err = build_component_box_payload(kw, block_lines, all_defs, lines)
+  elseif kw == "*COMPONENT_SPHERE" then
+    payload, err = build_component_sphere_payload(kw, block_lines, all_defs)
+  elseif kw == "*COMPONENT_CYLINDER" then
+    payload, err = build_component_cylinder_payload(kw, block_lines, all_defs)
+  elseif kw == "*GEOMETRY_BOX" then
+    payload, err = build_geometry_box_payload(kw, block_lines, all_defs)
+  elseif kw == "*GEOMETRY_SPHERE" or kw == "*GEOMETRY_ELLIPSOID" then
+    payload, err = build_geometry_sphere_payload(kw, block_lines, all_defs)
+  elseif kw == "*GEOMETRY_PIPE" then
+    payload, err = build_geometry_pipe_payload(kw, block_lines, all_defs)
+  else
+    payload, err = build_generic_payload(kw, block_lines, all_defs)
   end
 
-  local points, scalars, raw_numbers = flatten_points(block_lines)
-  local payload_splits = nil
-  if (block.keyword or ""):upper() == "*COMPONENT_BOX" then
-    local first_nums = find_first_value_line(block_lines)
-    if not first_nums or #first_nums < 5 then
-      return nil, "*COMPONENT_BOX needs at least 5 numeric values on the first data line"
-    end
-    local nums = find_last_value_line(block_lines)
-    if not nums or #nums < 6 then
-      return nil, "*COMPONENT_BOX needs at least 6 numeric values on the last data line"
-    end
-    local split_x = math.max(1, math.floor(tonumber(first_nums[3]) or 1))
-    local split_y = math.max(1, math.floor(tonumber(first_nums[4]) or 1))
-    local split_z = math.max(1, math.floor(tonumber(first_nums[5]) or 1))
-    points = {
-      { nums[1], nums[2], nums[3] },
-      { nums[4], nums[5], nums[6] },
-    }
-    scalars = {}
-    raw_numbers = { nums[1], nums[2], nums[3], nums[4], nums[5], nums[6] }
-    payload_splits = { split_x, split_y, split_z }
+  if not payload then
+    return nil, err
   end
-  local payload = {
-    keyword = block.keyword,
-    shape = shape,
-    file = vim.api.nvim_buf_get_name(bufnr),
-    cursor_row = row,
-    block = {
-      start_row = block.start_row,
-      end_row = block.end_row,
-      lines = block_lines,
-    },
-    points = points,
-    scalars = scalars,
-    numbers = raw_numbers,
-    splits = payload_splits,
+
+  payload.file = vim.api.nvim_buf_get_name(bufnr)
+  payload.cursor_row = row
+  payload.block = {
+    start_row = block.start_row,
+    end_row = block.end_row,
+    lines = block_lines,
   }
   return payload
 end
 
+-- =====================================================================
+-- Viewer launch
+-- =====================================================================
 local function repo_root()
   local src = debug.getinfo(1, "S").source
   if src:sub(1, 1) == "@" then
