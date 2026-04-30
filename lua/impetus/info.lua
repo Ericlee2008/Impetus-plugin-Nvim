@@ -1751,7 +1751,7 @@ function M.setup()
           local ft = vim.bo[ev.buf].filetype
           local cur_win = vim.api.nvim_get_current_win()
           local _wcfg = vim.api.nvim_win_get_config(cur_win)
-          if (ft == "impetus" or ft == "kwt")
+          if ft == "impetus"
             and vim.b[ev.buf].impetus_info_buffer ~= 1
             and vim.b[ev.buf].impetus_help_buffer ~= 1
             and vim.b[ev.buf].impetus_child_buffer ~= 1
@@ -1784,7 +1784,7 @@ function M.setup()
         return
       end
       local ft = vim.bo[ev.buf].filetype
-      if ft ~= "impetus" and ft ~= "kwt" then
+      if ft ~= "impetus" then
         clear_selected_line(pane)
         return
       end

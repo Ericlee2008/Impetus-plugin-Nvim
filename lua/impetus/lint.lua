@@ -583,7 +583,22 @@ local function check_unused_params(ctx, diagnostics)
   end
 
   for name, defs in pairs(idx.params.defs or {}) do
-    local used = cross and cross.refs[name] and #cross.refs[name] > 0
+    local used = false
+    if cross and cross.refs[name] then
+      for _, ref in ipairs(cross.refs[name]) do
+        local is_self_ref = false
+        for _, def in ipairs(defs) do
+          if ref.row == def.row then
+            is_self_ref = true
+            break
+          end
+        end
+        if not is_self_ref then
+          used = true
+          break
+        end
+      end
+    end
     if not used then
       local first = defs[1]
       if first and not inside_object(first.row) then
@@ -725,11 +740,12 @@ local function check_empty_blocks(ctx, diagnostics)
           break
         end
       end
-      -- Count data rows
+      -- Count data rows (skip titles, comments, directives)
       local data_count = 0
       for j = start_i + 1, end_i do
         local t = trim(lines[j] or "")
-        if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" and t:sub(1, 1) ~= "~" then
+        local is_title = t:match('^".*"$') ~= nil
+        if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" and t:sub(1, 1) ~= "~" and not is_title then
           data_count = data_count + 1
         end
       end
@@ -737,7 +753,7 @@ local function check_empty_blocks(ctx, diagnostics)
         local entry = db[kw]
         -- Only warn if the keyword is known to expect data
         if entry and entry.signature_rows and #entry.signature_rows > 0 then
-          push_diagnostic(diagnostics, start_i - 1, 0, SEV.WARNING, "Empty keyword block: " .. kw)
+          push_diagnostic(diagnostics, start_i - 1, 0, SEV.ERROR, "Empty keyword block: " .. kw)
         end
       end
       i = end_i
@@ -1021,30 +1037,33 @@ local function check_required_fields(ctx, diagnostics)
           if #data_rows > 0 then
             local sig = entry.signature_rows[1] or {}
             local desc = entry.descriptions or {}
-            local fields = split_csv_keep_empty(lines[data_rows[1]])
-            for fi, param_name in ipairs(sig) do
-              local p = normalize_param_name(param_name)
-              if p ~= "" and p ~= "." and p ~= "..." and p ~= "-" then
-                local param_desc = find_desc_for_param(desc, param_name)
-                local is_optional = description_marks_optional(param_desc)
-                local has_options = extract_options_from_desc(param_desc) ~= nil
-                local prev_val = fi > 1 and trim(fields[fi - 1] or "") or ""
-                local is_all_entity_id = (p:match("^enid") or p:match("^eid")) and prev_val:upper() == "ALL"
-                -- R is required only when pid == "DP"
-                if p == "r" then
-                  local pid_val = trim(fields[2] or ""):upper()
-                  is_optional = (pid_val ~= "DP")
-                end
-                if not is_optional and not has_options and not is_all_entity_id then
-                  local val = trim(fields[fi] or "")
-                  if val == "" or val == "-" then
-                    push_diagnostic(
-                      diagnostics,
-                      data_rows[1] - 1,
-                      0,
-                      SEV.ERROR,
-                      "Missing required field '" .. param_name .. "' in " .. kw
-                    )
+            -- Check required fields for ALL data rows (each row is an independent sensor definition)
+            for _, dr in ipairs(data_rows) do
+              local fields = split_csv_keep_empty(lines[dr])
+              for fi, param_name in ipairs(sig) do
+                local p = normalize_param_name(param_name)
+                if p ~= "" and p ~= "." and p ~= "..." and p ~= "-" then
+                  local param_desc = find_desc_for_param(desc, param_name)
+                  local is_optional = description_marks_optional(param_desc)
+                  local has_options = extract_options_from_desc(param_desc) ~= nil
+                  local prev_val = fi > 1 and trim(fields[fi - 1] or "") or ""
+                  local is_all_entity_id = (p:match("^enid") or p:match("^eid")) and prev_val:upper() == "ALL"
+                  -- R is required only when pid == "DP"
+                  if p == "r" then
+                    local pid_val = trim(fields[2] or ""):upper()
+                    is_optional = (pid_val ~= "DP")
+                  end
+                  if not is_optional and not has_options and not is_all_entity_id then
+                    local val = trim(fields[fi] or "")
+                    if val == "" or val == "-" then
+                      push_diagnostic(
+                        diagnostics,
+                        dr - 1,
+                        0,
+                        SEV.ERROR,
+                        "Missing required field '" .. param_name .. "' in " .. kw
+                      )
+                    end
                   end
                 end
               end
@@ -1230,6 +1249,37 @@ local function check_required_fields(ctx, diagnostics)
               local p = normalize_param_name(param_name)
               if p ~= "" and p ~= "." and p ~= "..." and p ~= "-" then
                 local is_optional = (fi >= 3)
+                if not is_optional then
+                  local param_desc = find_desc_for_param(desc, param_name)
+                  is_optional = description_marks_optional(param_desc)
+                end
+                local has_options = extract_options_from_desc(find_desc_for_param(desc, param_name)) ~= nil
+                if not is_optional and not has_options then
+                  local val = trim(fields[fi] or "")
+                  if val == "" or val == "-" then
+                    push_diagnostic(
+                      diagnostics,
+                      data_rows[1] - 1,
+                      0,
+                      SEV.ERROR,
+                      "Missing required field '" .. param_name .. "' in " .. kw
+                    )
+                  end
+                end
+              end
+            end
+          end
+
+        elseif kw_upper == "*TRANSFORM_MESH_CARTESIAN" or kw_upper == "*TRANSFORM_MESH_CYLINDRICAL" then
+          -- coid, entype, enid, csysid are required; fid_1~fid_4 are optional (default: 0)
+          if #data_rows > 0 then
+            local sig = entry.signature_rows[1] or {}
+            local desc = entry.descriptions or {}
+            local fields = split_csv_keep_empty(lines[data_rows[1]])
+            for fi, param_name in ipairs(sig) do
+              local p = normalize_param_name(param_name)
+              if p ~= "" and p ~= "." and p ~= "..." and p ~= "-" then
+                local is_optional = p:match("^fid_%d+$")
                 if not is_optional then
                   local param_desc = find_desc_for_param(desc, param_name)
                   is_optional = description_marks_optional(param_desc)

@@ -1,3 +1,7 @@
+if exists("b:current_syntax")
+  finish
+endif
+
 syntax match impetusKeyword /^\s*\(\d\+\.\s*\)\?\*[A-Za-z0-9_-]\+/
 
 syntax match impetusControlStart /^\s*\~\(if\|repeat\|convert_from_[A-Za-z0-9_]*\|begin_scope\)\>/
@@ -14,7 +18,7 @@ syntax match impetusEmptyField /,\zs\s\+\ze,/ containedin=ALLBUT,impetusComment,
 syntax match impetusHeader /^\s*Variable\s\+Description\s*$/
 syntax match impetusOptions /\<options\>:/ containedin=ALL
 syntax match impetusDefault /\<default\>:/ containedin=ALL
-syntax match impetusExample /^\s*[#$]\?\s*\(example\|end\)\s*$/
+" syntax match impetusExample /^\s*[#$]\?\s*\(example\|end\)\s*$/
 syntax region impetusExample start=/^\s*[#$]\?\s*example\s*$/ end=/^\s*[#$]\?\s*end\s*$/ keepend
 syntax match impetusDivider /^\s*\(\d\+\.\s*\)\?-\{8,}\s*$/
 syntax match impetusFieldName /^\s*[[:alnum:]_%%\[\]]\+\s*:\s*/ contains=impetusParam,impetusRepeatVar

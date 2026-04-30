@@ -24,7 +24,7 @@ end
 function Source.new(_, config)
   local self = setmetatable({}, { __index = Source })
   self.opts = vim.tbl_deep_extend("force", {
-    filetypes = { "impetus", "kwt" },
+    filetypes = { "impetus" },
     min_keyword_length = 1,
   }, (config and config.opts) or {})
   return self
@@ -43,6 +43,28 @@ function Source:get_completions(context, resolve)
   local line = context.line or vim.api.nvim_get_current_line()
   local cursor = context.cursor or { vim.api.nvim_win_get_cursor(0)[1], vim.api.nvim_win_get_cursor(0)[2] }
   local cur_col = cursor[2]
+
+  -- Disable completion inside *PARAMETER / *PARAMETER_DEFAULT / *PARAMETER_RANGE_* blocks.
+  -- These blocks contain parameter definitions, not standard keyword data rows;
+  -- completion popups are not useful there and can cause highlight glitches.
+  local row = cursor[1]
+  local lines = vim.api.nvim_buf_get_lines(0, 0, row, false)
+  local in_param_block = false
+  for i = #lines, 1, -1 do
+    local kw = (lines[i] or ""):match("^%s*%*([%u%d_%-]+)")
+    if kw then
+      local k = "*" .. kw:upper()
+      if k == "*PARAMETER" or k == "*PARAMETER_DEFAULT" or k:match("^%*PARAMETER_") then
+        in_param_block = true
+      end
+      break
+    end
+  end
+  if in_param_block then
+    resolve({ is_incomplete_forward = false, is_incomplete_backward = false, items = {} })
+    return
+  end
+
   local start_col = find_start_col(line, cur_col)
   local base = line:sub(start_col + 1, cur_col)
   local keyword_ctx = is_keyword_context(line, cur_col)

@@ -578,6 +578,14 @@ local function setup_filetype_behaviors()
     if vim.bo[buf].filetype ~= "impetus" then
       return
     end
+    -- Avoid redundant syntax clear when syntax is already active.
+    -- Frequent syntax clear during typing (triggered by completion palette
+    -- refresh) can cause syntax match rules (like impetusKeyword) to be
+    -- lost and not restored correctly, making keywords fall back to dull
+    -- default colors until a window switch forces a full re-apply.
+    if vim.b[buf].current_syntax == "impetus" then
+      return
+    end
     local syntax_path = plugin_root .. "/syntax/impetus.vim"
     vim.api.nvim_buf_call(buf, function()
       vim.cmd("silent! syntax clear")
@@ -632,7 +640,7 @@ local function setup_filetype_behaviors()
     end
     ensure_impetus_filetype(buf)
     local ft = vim.bo[buf].filetype
-    if ft ~= "impetus" and ft ~= "kwt" then
+    if ft ~= "impetus" then
       return
     end
     refresh_main_visuals(buf)
@@ -688,7 +696,7 @@ local function setup_filetype_behaviors()
         local b = vim.api.nvim_win_get_buf(w)
         if vim.api.nvim_buf_is_valid(b) then
           local ft = vim.bo[b].filetype
-          if (ft == "impetus" or ft == "kwt")
+          if ft == "impetus"
             and vim.w[w].impetus_nav_window ~= 1
             and vim.w[w].impetus_child_window ~= 1
             and vim.b[b].impetus_help_buffer ~= 1
@@ -937,7 +945,7 @@ local function setup_filetype_behaviors()
     pattern = "*",
     callback = function(ev)
       local ft = vim.bo[ev.buf].filetype
-      if ft == "impetus" or ft == "kwt" then
+      if ft == "impetus" then
         attach_behaviors(ev.buf)
       end
     end,
@@ -991,7 +999,7 @@ local function setup_filetype_behaviors()
 
   vim.api.nvim_create_autocmd("Syntax", {
     group = group,
-    pattern = { "impetus", "kwt" },
+    pattern = { "impetus" },
     callback = function()
       local ft = vim.bo.filetype
       if vim.tbl_contains(config.get().filetypes, ft) then
@@ -1006,11 +1014,11 @@ local function setup_filetype_behaviors()
   -- our highlight palette whenever entering an Impetus-like buffer.
   vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter", "FileType" }, {
     group = group,
-    pattern = { "*.k", "*.key", "*.imp", "*.inp", "impetus", "kwt" },
+    pattern = { "*.k", "*.key", "*.imp", "*.inp", "impetus" },
     callback = function(ev)
       ensure_impetus_filetype(ev.buf)
       local ft = vim.bo[ev.buf].filetype
-      if ft == "impetus" or ft == "kwt" then
+      if ft == "impetus" then
         refresh_main_visuals(ev.buf)
       end
     end,

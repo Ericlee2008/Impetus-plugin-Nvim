@@ -818,28 +818,33 @@ local function parse_block_objects(lines, block, db)
           if ref_t then store_ref(ref_t, idv, field_col_from_idx(raw_line, field_idx)) end
         end
       end
-      -- Treat fcn(id) / crv(id) / dfcn(id) anywhere in the field as curve references
-      local tv = trim(value)
-      local search_pos = 1
-      while search_pos <= #tv do
-        local s, e, prefix, ref_id = tv:find("(%a+)%s*%(%s*(%d+)%s*%)", search_pos)
-        if not s then break end
-        local p = prefix:lower()
-        if p == "fcn" or p == "crv" or p == "dfcn" then
-          -- Compute the exact column of the numeric id inside raw_line
-          local field_start_col = field_col_from_idx(raw_line, field_idx)
-          local match_str = tv:sub(s, e)
-          local id_s = match_str:find("%d+")
-          if id_s then
-            local id_col = field_start_col + s - 1 + id_s - 1
-            store_ref("curve", ref_id, id_col)
-          else
-            store_ref("curve", ref_id, field_start_col + s - 1)
-          end
-        end
-        search_pos = e + 1
-      end
     end
+      -- Treat fcn(id) / crv(id) / dfcn(id) anywhere in the row as curve references.
+      -- Scan on raw_line (not split fields) so commas inside crv(101,x) are not
+      -- mistaken for CSV separators.
+      do
+        local tv = trim(raw_line)
+        local search_pos = 1
+        while search_pos <= #tv do
+          local s, e, prefix, ref_id = tv:find("(%a+)%s*%(%s*(%d+)%s*[,)]", search_pos)
+          if not s then break end
+          local p = prefix:lower()
+          if p == "fcn" or p == "crv" or p == "dfcn" then
+            local match_str = tv:sub(s, e)
+            local id_s = match_str:find("%d+")
+            if id_s then
+              local first_non_space = raw_line:find("%S") or 1
+              local trim_offset = first_non_space - 1
+              local id_col = trim_offset + s - 1 + id_s - 1
+              store_ref("curve", ref_id, id_col)
+            else
+              local first_non_space = raw_line:find("%S") or 1
+              store_ref("curve", ref_id, first_non_space - 1 + s - 1)
+            end
+          end
+          search_pos = e + 1
+        end
+      end
   end
   end
   return result
@@ -1057,7 +1062,7 @@ function M.invalidate_cross_file_cache_for_path(path)
 end
 
 -- Build a cross-file parameter index that merges defs/refs from the current buffer
--- and all recursively included files (plus any other open impetus/kwt buffers).
+-- and all recursively included files (plus any other open impetus buffers).
 function M.build_cross_file_param_index(bufnr)
   bufnr = (bufnr == nil or bufnr == 0) and vim.api.nvim_get_current_buf() or bufnr
   local all_defs = {}
@@ -1179,7 +1184,7 @@ function M.build_cross_file_param_index(bufnr)
   for _, bn in ipairs(vim.api.nvim_list_bufs()) do
     if bn ~= bufnr and vim.api.nvim_buf_is_loaded(bn) then
       local ft = vim.bo[bn].filetype
-      if ft == "impetus" or ft == "kwt" then
+      if ft == "impetus" then
         if vim.b[bn].impetus_info_buffer ~= 1
           and vim.b[bn].impetus_help_buffer ~= 1
           and vim.b[bn].impetus_popup_buffer ~= 1
@@ -1452,12 +1457,15 @@ local function scan_object_refs_from_lines(lines)
           refs.table[tabid] = true
         end
       end
-      -- fcn(id) / crv(id) syntax
+      -- fcn(id) / crv(id) / dfcn(id) syntax (allows second arg: crv(101, x))
       local tv = trim(raw)
-      for id in tv:gmatch("fcn%s*%(%s*(%d+)%s*%)") do
+      for id in tv:gmatch("fcn%s*%(%s*(%d+)%s*[,)]") do
         refs.curve[id] = true
       end
-      for id in tv:gmatch("crv%s*%(%s*(%d+)%s*%)") do
+      for id in tv:gmatch("crv%s*%(%s*(%d+)%s*[,)]") do
+        refs.curve[id] = true
+      end
+      for id in tv:gmatch("dfcn%s*%(%s*(%d+)%s*[,)]") do
         refs.curve[id] = true
       end
     end
@@ -1509,7 +1517,25 @@ function M.object_under_cursor(bufnr)
   local line = (vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false) or {})[1] or ""
   local fields = split_csv_outside_quotes(line)
   local idv = value_as_id(trim(fields[ctx.field_idx] or ""))
-  if not idv then return nil end
+  if not idv then
+    -- Fallback: cursor might be inside crv(id, x) / fcn(id, t) / dfcn(id, t)
+    -- where the comma was split by split_csv_outside_quotes.
+    local col1 = col0 + 1
+    if line:sub(col1, col1):match("%d") then
+      local cursor_num = line:match("%d+", col1)
+      if cursor_num then
+        local before = line:sub(1, col1 - 1)
+        local func_name = before:match("(%a+)%s*%(%s*$")
+        if func_name then
+          local p = func_name:lower()
+          if p == "fcn" or p == "crv" or p == "dfcn" then
+            return { obj_type = "curve", id = cursor_num }
+          end
+        end
+      end
+    end
+    return nil
+  end
   if idv == "0" or idv == 0 then return nil end
   -- *GEOMETRY_COMPOSITE: negative sign means boolean subtraction; use absolute value for lookup
   local kw_upper_obj = (ctx.keyword or ""):upper()
@@ -1674,7 +1700,7 @@ function M.build_cross_file_object_index(bufnr)
   for _, bn in ipairs(vim.api.nvim_list_bufs()) do
     if bn ~= bufnr and vim.api.nvim_buf_is_loaded(bn) then
       local ft = vim.bo[bn].filetype
-      if ft == "impetus" or ft == "kwt" then
+      if ft == "impetus" then
         if vim.b[bn].impetus_info_buffer ~= 1
           and vim.b[bn].impetus_help_buffer ~= 1
           and vim.b[bn].impetus_popup_buffer ~= 1
@@ -1745,7 +1771,7 @@ function M.object_definition(bufnr, obj_type, id)
   for _, bn in ipairs(vim.api.nvim_list_bufs()) do
     if bn ~= bufnr and vim.api.nvim_buf_is_loaded(bn) then
       local ft = vim.bo[bn].filetype
-      if ft == "impetus" or ft == "kwt" then
+      if ft == "impetus" then
         local bfile = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bn), ":p")
         local inc_idx = M.build_buffer_index(bn)
         local def = (inc_idx.object_defs[obj_type] or {})[id]
@@ -1814,7 +1840,7 @@ function M.warmup_cross_file_cache()
       return
     end
     local ft = vim.bo[bn].filetype
-    if ft ~= "impetus" and ft ~= "kwt" then
+    if ft ~= "impetus" then
       return
     end
     local lines = vim.api.nvim_buf_get_lines(bn, 0, -1, false)
@@ -1877,7 +1903,7 @@ function M.object_references(bufnr, obj_type, id)
   for _, bn in ipairs(vim.api.nvim_list_bufs()) do
     if bn ~= bufnr and vim.api.nvim_buf_is_loaded(bn) then
       local ft = vim.bo[bn].filetype
-      if ft == "impetus" or ft == "kwt" then
+      if ft == "impetus" then
         local bfile = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bn), ":p")
         collect_from_buffer(bn, bfile)
       end
@@ -1967,13 +1993,13 @@ function M.param_references_all(bufnr, name)
   -- Start with current buffer
   search_buf(bufnr)
 
-  -- Also search all other open impetus/kwt buffers (covers parent files and siblings).
+  -- Also search all other open impetus buffers (covers parent files and siblings).
   -- Skip virtual/display buffers (info pane, help pane, popups) — their content is
   -- synthetic and would produce spurious references.
   for _, bn in ipairs(vim.api.nvim_list_bufs()) do
     if bn ~= bufnr and vim.api.nvim_buf_is_loaded(bn) then
       local ft = vim.bo[bn].filetype
-      if ft == "impetus" or ft == "kwt" then
+      if ft == "impetus" then
         if vim.b[bn].impetus_info_buffer ~= 1
           and vim.b[bn].impetus_help_buffer ~= 1
           and vim.b[bn].impetus_popup_buffer ~= 1

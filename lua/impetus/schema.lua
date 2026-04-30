@@ -412,6 +412,7 @@ local full_repeat_exact = {
   ["*TRIM_HOLE"] = true,
   ["*TABLE"] = true,
   ["*TRANSFORM_MESH_CARTESIAN"] = true,
+  ["*OUTPUT_SENSOR"] = true,
 }
 
 local function infer_repeat_mode(keyword)

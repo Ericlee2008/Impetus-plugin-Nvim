@@ -117,9 +117,9 @@ function M.update(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) then
     return
   end
-  -- Only for impetus/kwt filetypes.
+  -- Only for impetus filetype.
   local ft = vim.bo[bufnr].filetype
-  if ft ~= "impetus" and ft ~= "kwt" then
+  if ft ~= "impetus" then
     return
   end
   -- Skip huge buffers to avoid hanging on open.
@@ -243,7 +243,7 @@ function M.toggle()
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
       if vim.api.nvim_buf_is_valid(buf) then
         local ft = vim.bo[buf].filetype
-        if ft == "impetus" or ft == "kwt" then
+        if ft == "impetus" then
           M.update(buf)
         end
       end
@@ -292,7 +292,7 @@ function M.setup()
         for _, buf in ipairs(vim.api.nvim_list_bufs()) do
           if vim.api.nvim_buf_is_valid(buf) then
             local ft = vim.bo[buf].filetype
-            if ft == "impetus" or ft == "kwt" then
+            if ft == "impetus" then
               M.update(buf)
             end
           end

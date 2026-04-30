@@ -70,6 +70,7 @@ local function parse_docs()
 
   local lines = vim.fn.readfile(path)
   local docs = {}
+  local case_sensitive = {}
   local mode = nil
 
   for _, raw in ipairs(lines) do
@@ -98,8 +99,9 @@ local function parse_docs()
             signature = name_part,
             desc = desc,
           }
-          -- Store case-sensitive key for single-letter variables like D/V/A
-          docs[name_part] = {
+          -- Store case-sensitive key in a separate table so that single-letter
+          -- variables like t/T do not overwrite each other via exact_key.
+          case_sensitive[name_part] = {
             type = mode,
             name = name_part,
             signature = name_part,
@@ -125,6 +127,7 @@ local function parse_docs()
     end
   end
 
+  docs._case = case_sensitive
   cache.path = path
   cache.mtime = mt
   cache.docs = docs
@@ -157,7 +160,7 @@ local function word_under_cursor()
 
   -- Manual word extraction with fixed alnum boundary (independent of iskeyword)
   local function is_word_char(ch)
-    return ch:match("[[:alnum:]_]") ~= nil
+    return ch:match("[%w_]") ~= nil
   end
 
   -- col is 0-based; line:sub() is 1-based.
@@ -226,7 +229,11 @@ function M.show()
   end
 
   local docs = parse_docs()
-  local entry = docs[word]
+  -- Prefer case-sensitive match first (t vs T, D vs d(i,j), etc.)
+  local entry = docs._case and docs._case[word]
+  if not entry then
+    entry = docs[word]
+  end
   if not entry then
     entry = docs[word:lower()]
   end

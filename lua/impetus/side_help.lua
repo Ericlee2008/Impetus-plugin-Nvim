@@ -479,7 +479,8 @@ local function ensure_pane(source_buf, source_win)
     local pane = state.pane or recover_existing_pane()
     if pane and pane.win and vim.api.nvim_win_is_valid(pane.win) then
       state.suspend = false
-    elseif not state.pane then
+    else
+      -- No valid pane exists (or pane points to a dead window); clear suspend.
       state.suspend = false
     end
   end
@@ -744,10 +745,12 @@ local function apply_active_param_highlight(help_buf, keyword, param_name, ctx)
   end
 end
 
-function M.render(source_buf, source_win)
+function M.render(source_buf, source_win, opts)
+  opts = opts or {}
   if vim.g.impetus_opening_child == 1 then
     return
   end
+
   source_buf, source_win = resolve_primary_source(source_buf, source_win)
   if not vim.api.nvim_buf_is_valid(source_buf) then
     return
@@ -760,6 +763,7 @@ function M.render(source_buf, source_win)
   end
 
   local keyword, param, ctx = detect_context(source_buf, source_win)
+
   local pane = ensure_pane(source_buf, source_win)
   if not pane then
     return
@@ -933,7 +937,7 @@ function M.setup()
       if not vim.tbl_contains(config.get().filetypes or {}, ft) then
         return
       end
-      M.render(buf, cur_win)
+      M.render(buf, cur_win, { auto = true })
     end,
   })
 

@@ -951,36 +951,81 @@ local function advanced_clear_current_buffer()
   return removed, entries
 end
 
+-- Split a parameter definition line into (indent, lhs, rhs, desc).
+-- Desc is the part after the LAST comma (typically a quoted description).
+-- Returns nil if the line is not a parameter definition.
+local function split_param_line(line)
+  local indent, lhs, rest = line:match("^(%s*)(%%?[%a_][%w_]*)%s*=%s*(.-)%s*$")
+  if not lhs then
+    return nil
+  end
+
+  -- Search from right to left for the last ", \"desc\"" pattern
+  local desc_start = nil
+  for pos = #rest - 1, 1, -1 do
+    if rest:sub(pos):match('^,%s*"[^"]*"%s*$') then
+      desc_start = pos
+      break
+    end
+  end
+
+  if desc_start then
+    local rhs = trim(rest:sub(1, desc_start - 1))
+    local desc = trim(rest:sub(desc_start + 1))  -- drop the comma itself
+    return indent, lhs, rhs, desc
+  end
+
+  -- Fallback: plain comma (no quotes) — use the LAST comma to avoid
+  -- splitting expressions like crv(1, x)
+  local last_comma = nil
+  for pos = #rest, 1, -1 do
+    if rest:sub(pos, pos) == "," then
+      last_comma = pos
+      break
+    end
+  end
+  if last_comma then
+    local rhs = trim(rest:sub(1, last_comma - 1))
+    local desc = trim(rest:sub(last_comma + 1))
+    if desc ~= "" then
+      return indent, lhs, rhs, desc
+    end
+  end
+
+  return indent, lhs, trim(rest), nil
+end
+
 local function format_parameter_definition_lines(block_lines)
   local specs = {}
   local max_lhs = 0
-  local max_rhs = 0
 
   for i, line in ipairs(block_lines or {}) do
-    local indent, lhs, rhs, comment = line:match("^(%s*)(%%?[%a_][%w_]*)%s*=%s*(.-)%s*(,.*)$")
-    if not lhs then
-      indent, lhs, rhs = line:match("^(%s*)(%%?[%a_][%w_]*)%s*=%s*(.-)%s*$")
-    end
+    local indent, lhs, rhs, desc = split_param_line(line)
     if lhs and rhs and rhs ~= "" then
-      rhs = trim(rhs)
-      comment = comment and trim(comment) or nil
-      if comment then
-        -- normalize spaces after comma so quotes line up across rows
-        comment = comment:gsub("^,%s+", ", ")
-      end
       specs[i] = {
         indent = indent or "",
         lhs = lhs,
         rhs = rhs,
-        comment = comment,
+        desc = desc,
       }
       max_lhs = math.max(max_lhs, #lhs)
-      max_rhs = math.max(max_rhs, #rhs)
     end
   end
 
   if max_lhs == 0 then
     return block_lines
+  end
+
+  -- Compute max_prefix_len: the longest visual length from indent to the
+  -- comma (inclusive) so that all opening quotes line up in the same column.
+  local max_prefix_len = 0
+  for _, spec in pairs(specs) do
+    if spec.desc then
+      local lhs_pad_len = math.max(1, max_lhs - #spec.lhs + 1)
+      -- indent + lhs + lhs_pad + "= " + rhs + ","
+      local prefix_len = #spec.indent + #spec.lhs + lhs_pad_len + 2 + #spec.rhs + 1
+      max_prefix_len = math.max(max_prefix_len, prefix_len)
+    end
   end
 
   local out = {}
@@ -991,9 +1036,13 @@ local function format_parameter_definition_lines(block_lines)
     else
       local lhs_pad = string.rep(" ", math.max(1, max_lhs - #spec.lhs + 1))
       local text = spec.indent .. spec.lhs .. lhs_pad .. "= " .. spec.rhs
-      if spec.comment then
-        local rhs_pad = string.rep(" ", math.max(1, max_rhs - #spec.rhs + 1))
-        text = text .. rhs_pad .. spec.comment
+      if spec.desc then
+        local prefix_len = #spec.indent + #spec.lhs + #lhs_pad + 2 + #spec.rhs + 1
+        local spaces_needed = max_prefix_len - prefix_len + 1
+        if spaces_needed < 1 then
+          spaces_needed = 1
+        end
+        text = text .. "," .. string.rep(" ", spaces_needed) .. spec.desc
       end
       out[#out + 1] = text
     end
@@ -1011,31 +1060,44 @@ local function split_csv_keep_empty(line)
 end
 
 local function format_curve_data_lines(block_lines)
-  -- Align multi-column data rows (2 columns for *CURVE/*TABLE, 3 for *PATH)
+  -- Align multi-column data rows.
+  -- Signed numbers (+/-) are split into a sign column and a numeric column,
+  -- so digits align regardless of sign presence.
   local data_specs = {}
-  local max_widths = {}
+  local max_widths = {}       -- max numeric width per column
+  local column_has_sign = {}  -- true if any field in this column has a leading sign
 
   for i, line in ipairs(block_lines) do
-    -- Only process lines that contain a literal comma
     if (line or ""):find(",") then
       local fields = split_csv_keep_empty(line)
       if #fields >= 2 then
         local cols = {}
+        local signs = {}
+        local num_parts = {}
         local has_content = false
         for ci = 1, #fields do
           local c = trim(fields[ci])
           cols[ci] = c
           if c ~= "" then
             has_content = true
+            if c:match("^[+-]%d") or c:match("^[+-]%.%d") then
+              signs[ci] = c:sub(1, 1)
+              num_parts[ci] = c:sub(2)
+              column_has_sign[ci] = true
+            else
+              signs[ci] = ""
+              num_parts[ci] = c
+            end
           end
         end
         if has_content then
           local widths = {}
-          for ci, c in ipairs(cols) do
-            widths[ci] = vim.fn.strdisplaywidth(c)
-            max_widths[ci] = math.max(max_widths[ci] or 0, widths[ci])
+          for ci = 1, #cols do
+            local w = vim.fn.strdisplaywidth(num_parts[ci] or "")
+            widths[ci] = w
+            max_widths[ci] = math.max(max_widths[ci] or 0, w)
           end
-          data_specs[i] = { cols = cols, widths = widths }
+          data_specs[i] = { cols = cols, signs = signs, num_parts = num_parts, widths = widths }
         end
       end
     end
@@ -1045,23 +1107,167 @@ local function format_curve_data_lines(block_lines)
     return block_lines
   end
 
+  local function format_field(ci, spec)
+    local sign = spec.signs[ci] or ""
+    local num = spec.num_parts[ci] or spec.cols[ci] or ""
+    if column_has_sign[ci] then
+      return (sign ~= "" and sign or " ") .. num
+    end
+    return num
+  end
+
   local out = {}
   for i, line in ipairs(block_lines) do
     local spec = data_specs[i]
     if not spec then
       out[#out + 1] = line
     else
-      local text = spec.cols[1]
+      local text = format_field(1, spec)
+      local total_w_1 = column_has_sign[1] and (1 + (spec.widths[1] or 0)) or (spec.widths[1] or 0)
       for ci = 2, #spec.cols do
         local prev_max = max_widths[ci - 1] or 0
+        local prev_total = column_has_sign[ci - 1] and (1 + prev_max) or prev_max
         local prev_w = spec.widths[ci - 1] or 0
-        local pad = string.rep(" ", math.max(0, prev_max - prev_w))
-        text = text .. ", " .. pad .. spec.cols[ci]
+        local prev_total_w = column_has_sign[ci - 1] and (1 + prev_w) or prev_w
+        local pad = string.rep(" ", math.max(0, prev_total - prev_total_w))
+        text = text .. ", " .. pad .. format_field(ci, spec)
       end
       out[#out + 1] = text
     end
   end
   return out
+end
+
+local function normalize_comma_lines(block_lines)
+  local out = {}
+  for _, line in ipairs(block_lines or {}) do
+    local t = trim(line)
+    if t == "" or t:sub(1, 1) == "#" or t:sub(1, 1) == "$" then
+      out[#out + 1] = line
+    else
+      local fields = split_csv_keep_empty(line)
+      if #fields > 1 then
+        local lead = line:match("^(%s*)") or ""
+        local text = trim(fields[1])
+        for i = 2, #fields do
+          text = text .. ", " .. trim(fields[i])
+        end
+        -- If first field was empty: ensure exactly one space before the
+        -- leading comma; discard the original lead to avoid stacking spaces.
+        if trim(fields[1]) == "" then
+          out[#out + 1] = " " .. text
+        else
+          out[#out + 1] = lead .. text
+        end
+      else
+        out[#out + 1] = line
+      end
+    end
+  end
+  return out
+end
+
+local function normalize_expression_lines(block_lines)
+  local out = {}
+  for _, line in ipairs(block_lines or {}) do
+    local t = trim(line)
+    if t == "" or t:sub(1, 1) == "#" or t:sub(1, 1) == "$" then
+      out[#out + 1] = line
+    else
+      local lead = line:match("^(%s*)") or ""
+      -- Step 1: remove spaces around ^
+      local text = t:gsub("%s*%^%s*", "^")
+      -- Step 2: remove spaces around + - * /
+      -- Protect quoted strings
+      local parts = {}
+      local qi = 1
+      while true do
+        local qs, qe = text:find('"', qi)
+        if not qs then
+          parts[#parts + 1] = { type = "text", value = text:sub(qi) }
+          break
+        end
+        parts[#parts + 1] = { type = "text", value = text:sub(qi, qs - 1) }
+        local qe2 = text:find('"', qe + 1)
+        if not qe2 then
+          parts[#parts + 1] = { type = "quote", value = text:sub(qs) }
+          break
+        end
+        parts[#parts + 1] = { type = "quote", value = text:sub(qs, qe2) }
+        qi = qe2 + 1
+      end
+      for _, p in ipairs(parts) do
+        if p.type == "text" then
+          local v = p.value
+          -- Remove spaces around + - * /
+          v = v:gsub("%s*([%+%-%*/])%s*", "%1")
+          p.value = v
+        end
+      end
+      local result = ""
+      for _, p in ipairs(parts) do
+        result = result .. p.value
+      end
+      out[#out + 1] = lead .. result
+    end
+  end
+  return out
+end
+
+local function simple_beautify_buffer()
+  local buf = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local blocks = split_keyword_blocks(lines)
+  if #blocks == 0 then
+    return 0, {}
+  end
+
+  local changed = 0
+  local entries = {}
+
+  for _, b in ipairs(blocks) do
+    local kw_upper = b.keyword:upper()
+    local block_lines = {}
+    for r = b.start_row + 1, b.end_row do
+      block_lines[#block_lines + 1] = lines[r] or ""
+    end
+
+    local formatted = nil
+    if kw_upper == "*PARAMETER" or kw_upper == "*PARAMETER_DEFAULT" then
+      -- 双引号对齐优先：先规范化表达式运算符（避免对齐后 rhs 长度变化），
+      -- 再对齐 name = value, "desc"
+      formatted = normalize_expression_lines(block_lines)
+      formatted = format_parameter_definition_lines(formatted)
+    elseif kw_upper == "*CURVE" or kw_upper == "*TABLE" or kw_upper == "*PATH"
+        or kw_upper == "*NODE" or kw_upper:match("^%*ELEMENT") then
+      -- 列对齐优先：不对齐后再用 normalize_comma_lines 破坏列宽
+      formatted = format_curve_data_lines(block_lines)
+    elseif kw_upper == "*FUNCTION" then
+      -- 表达式规范化（逗号在函数调用括号内，不能用简单 CSV split 处理）
+      formatted = normalize_expression_lines(block_lines)
+    else
+      -- 其他一般关键字：逗号后一个空格 + 表达式运算符规范化
+      formatted = normalize_comma_lines(block_lines)
+      formatted = normalize_expression_lines(formatted)
+    end
+
+    if formatted then
+      for idx, new_line in ipairs(formatted) do
+        local row = b.start_row + idx
+        local old_line = lines[row]
+        if old_line ~= new_line then
+          lines[row] = new_line
+          changed = changed + 1
+          entries[#entries + 1] = { row = row, keyword = b.keyword, old_line = old_line, new_line = new_line }
+        end
+      end
+    end
+  end
+
+  if changed > 0 then
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  end
+  return changed, entries
 end
 
 local function align_parameter_blocks_in_buffer()
@@ -1173,7 +1379,17 @@ local function parse_assignments_from_line(line)
     local val_start = it.e + 1
     local val_end = (found[i + 1] and (found[i + 1].s - 1)) or #t
     local value = trim(t:sub(val_start, val_end))
-    value = trim((value:match("^([^,]+)") or value))
+    if found[i + 1] then
+      -- Multiple assignments on the same line: comma is the separator
+      value = trim((value:match("^([^,]+)") or value))
+    else
+      -- Single assignment: strip trailing description string
+      -- but preserve commas inside function arguments like min(1, 2).
+      local desc_pos = value:find(',%s*".*"$')
+      if desc_pos then
+        value = trim(value:sub(1, desc_pos - 1))
+      end
+    end
     if value ~= "" then
       out[#out + 1] = { name = it.name, value = value }
     end
@@ -1377,10 +1593,14 @@ local function eval_expr_fast(expr)
       return v
     elseif ch == "-" then
       pos = pos + 1
-      return -parse_factor()
+      local v = parse_factor()
+      if v == nil then return nil end
+      return -v
     elseif ch == "+" then
       pos = pos + 1
-      return parse_factor()
+      local v = parse_factor()
+      if v == nil then return nil end
+      return v
     else
       return parse_number()
     end
@@ -1509,6 +1729,49 @@ end
 
 -- Extended evaluator supporting intrinsic math functions (sin, cos, H, min, max, etc.).
 -- Used by re -b to compute final numeric values.
+local MATH_FUNCS = {
+  sin = function(x) return math.sin(math.rad(x)) end,
+  cos = function(x) return math.cos(math.rad(x)) end,
+  tan = function(x) return math.tan(math.rad(x)) end,
+  asin = function(x) return math.deg(math.asin(x)) end,
+  atan = function(x) return math.deg(math.atan(x)) end,
+  tanh = math.tanh,
+  sinr = math.sin,
+  cosr = math.cos,
+  tanr = math.tan,
+  asinr = math.asin,
+  acosr = math.acos,
+  atanr = math.atan,
+  exp = math.exp,
+  ln = math.log,
+  log = math.log,
+  log10 = math.log10,
+  sqrt = math.sqrt,
+  abs = math.abs,
+  sign = function(x) return x < 0 and -1 or 1 end,
+  floor = math.floor,
+  ceil = math.ceil,
+  round = function(x) return math.floor(x + 0.5) end,
+  mod = function(a, b) return a % b end,
+  d = function(i, j) return i == j and 1 or 0 end,
+  h = function(x) return x >= 0 and 1 or 0 end,
+  min = function(...) return math.min(...) end,
+  max = function(...) return math.max(...) end,
+  erf = function(x)
+    local a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
+    local p = 0.3275911
+    local sgn = x < 0 and -1 or 1
+    x = math.abs(x)
+    local t = 1 / (1 + p * x)
+    local y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x)
+    return sgn * y
+  end,
+}
+
+local CONSTANTS = {
+  pi = math.pi,
+}
+
 local function eval_expr_with_functions(expr)
   current_eval_error = nil
   local src = trim(expr or "")
@@ -1527,6 +1790,16 @@ local function eval_expr_with_functions(expr)
     end
     -- backward compatibility
     return cached == false and nil or cached
+  end
+
+  -- Skip quoted strings (e.g. descriptions inside *PARAMETER rows)
+  if src:match('^".*"$') then
+    return nil
+  end
+
+  -- Skip keyword headers and plain identifiers (enum values like P, SI, CFD)
+  if src:match("^%*") or not src:find("[%d%+%-%*/%^%(%)%[%].]") then
+    return nil
   end
 
   local s = src
@@ -1612,49 +1885,6 @@ local function eval_expr_with_functions(expr)
     end
   end
 
-  local MATH_FUNCS = {
-    sin = function(x) return math.sin(math.rad(x)) end,
-    cos = function(x) return math.cos(math.rad(x)) end,
-    tan = function(x) return math.tan(math.rad(x)) end,
-    asin = function(x) return math.deg(math.asin(x)) end,
-    atan = function(x) return math.deg(math.atan(x)) end,
-    tanh = math.tanh,
-    sinr = math.sin,
-    cosr = math.cos,
-    tanr = math.tan,
-    asinr = math.asin,
-    acosr = math.acos,
-    atanr = math.atan,
-    exp = math.exp,
-    ln = math.log,
-    log = math.log,
-    log10 = math.log10,
-    sqrt = math.sqrt,
-    abs = math.abs,
-    sign = function(x) return x < 0 and -1 or 1 end,
-    floor = math.floor,
-    ceil = math.ceil,
-    round = function(x) return math.floor(x + 0.5) end,
-    mod = function(a, b) return a % b end,
-    d = function(i, j) return i == j and 1 or 0 end,
-    h = function(x) return x >= 0 and 1 or 0 end,
-    min = function(...) return math.min(...) end,
-    max = function(...) return math.max(...) end,
-    erf = function(x)
-      local a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
-      local p = 0.3275911
-      local sgn = x < 0 and -1 or 1
-      x = math.abs(x)
-      local t = 1 / (1 + p * x)
-      local y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x)
-      return sgn * y
-    end,
-  }
-
-  local CONSTANTS = {
-    pi = math.pi,
-  }
-
   parse_factor = function()
     skip_ws()
     if pos > len then return nil end
@@ -1669,10 +1899,14 @@ local function eval_expr_with_functions(expr)
       return v
     elseif ch == "-" then
       pos = pos + 1
-      return -parse_factor()
+      local v = parse_factor()
+      if v == nil then return nil end
+      return -v
     elseif ch == "+" then
       pos = pos + 1
-      return parse_factor()
+      local v = parse_factor()
+      if v == nil then return nil end
+      return v
     elseif ch:match("[%d%.]") then
       return parse_number()
     elseif ch:match("[%a_]") then
@@ -1699,6 +1933,7 @@ local function eval_expr_with_functions(expr)
           end
           return fn_result
         else
+          current_eval_error = "Unknown function or identifier '" .. id .. "' in '" .. src .. "'"
           eval_cache_func[src] = { ok = false, error = current_eval_error }
           return nil
         end
@@ -1707,11 +1942,13 @@ local function eval_expr_with_functions(expr)
         if c then
           return c
         else
+          current_eval_error = "Unknown identifier '" .. id .. "' in '" .. src .. "'"
           eval_cache_func[src] = { ok = false, error = current_eval_error }
           return nil
         end
       end
     else
+      current_eval_error = "Unexpected character '" .. ch .. "' in '" .. src .. "'"
       eval_cache_func[src] = { ok = false, error = current_eval_error }
       return nil
     end
@@ -1838,6 +2075,255 @@ local function eval_expr_with_functions(expr)
   return out
 end
 
+-- Partial evaluator: simplifies numeric sub-expressions while preserving
+-- unknown identifiers (e.g. loop variables r1, r2).
+-- Returns a number if fully evaluable, a string if partially evaluable, nil on error.
+local function partial_eval_expr(expr)
+  local src = trim(expr or "")
+  if src == "" then return nil end
+  if src:match('^".*"$') then return nil end
+  if src:match("^%*") or not src:find("[%d%+%-%*/%^%(%)%[%].]") then return nil end
+
+  local s = src
+  local pos = 1
+  local len = #s
+
+  local function skip_ws()
+    while pos <= len and s:sub(pos, pos):match("%s") do pos = pos + 1 end
+  end
+
+  local function parse_number()
+    skip_ws()
+    local start = pos
+    while pos <= len and s:sub(pos, pos):match("[%d%.]") do pos = pos + 1 end
+    if pos > start then
+      if pos <= len and s:sub(pos, pos):match("[eE]") then
+        local ep = pos
+        pos = pos + 1
+        if pos <= len and s:sub(pos, pos):match("[+-]") then pos = pos + 1 end
+        local exp_start = pos
+        while pos <= len and s:sub(pos, pos):match("%d") do pos = pos + 1 end
+        if pos == exp_start then pos = ep end
+      end
+      local n = tonumber(s:sub(start, pos - 1))
+      if n then return n end
+    end
+    pos = start
+    return nil
+  end
+
+  local function parse_identifier()
+    skip_ws()
+    local start = pos
+    if pos <= len and s:sub(pos, pos):match("[%a_]") then
+      pos = pos + 1
+      while pos <= len and s:sub(pos, pos):match("[%w_]") do pos = pos + 1 end
+      return s:sub(start, pos - 1)
+    end
+    return nil
+  end
+
+  local parse_expr, parse_term, parse_power, parse_factor
+
+  local function parse_argument_list()
+    skip_ws()
+    if pos > len or s:sub(pos, pos) ~= "(" then return nil end
+    pos = pos + 1
+    local args = {}
+    skip_ws()
+    if pos <= len and s:sub(pos, pos) == ")" then
+      pos = pos + 1
+      return args
+    end
+    while true do
+      local v = parse_expr()
+      if v == nil then return nil end
+      args[#args + 1] = v
+      skip_ws()
+      if pos > len then return nil end
+      local ch = s:sub(pos, pos)
+      if ch == ")" then
+        pos = pos + 1
+        return args
+      elseif ch == "," then
+        pos = pos + 1
+      else
+        return nil
+      end
+    end
+  end
+
+  local function is_num(v) return type(v) == "number" end
+
+  local function fmt_val(v)
+    if is_num(v) then
+      local cleaned = clean_numeric_result(v)
+      if cleaned then return cleaned end
+      return string.format("%.15g", v)
+    end
+    return tostring(v)
+  end
+
+  parse_factor = function()
+    skip_ws()
+    if pos > len then return nil end
+    local ch = s:sub(pos, pos)
+    if ch == "(" then
+      pos = pos + 1
+      local v = parse_expr()
+      skip_ws()
+      if pos <= len and s:sub(pos, pos) == ")" then pos = pos + 1 end
+      if v == nil then return nil end
+      if is_num(v) then return v end
+      return "(" .. tostring(v) .. ")"
+    elseif ch == "-" then
+      pos = pos + 1
+      local v = parse_factor()
+      if v == nil then return nil end
+      if is_num(v) then return -v end
+      return "-" .. tostring(v)
+    elseif ch == "+" then
+      pos = pos + 1
+      local v = parse_factor()
+      if v == nil then return nil end
+      return v
+    elseif ch:match("[%d%.]") then
+      return parse_number()
+    elseif ch:match("[%a_]") then
+      local id = parse_identifier()
+      if not id then return nil end
+      skip_ws()
+      if pos <= len and s:sub(pos, pos) == "(" then
+        local args = parse_argument_list()
+        if args == nil then return nil end
+        local fn = MATH_FUNCS[id:lower()]
+        if fn then
+          local all_num = true
+          for _, a in ipairs(args) do
+            if not is_num(a) then all_num = false; break end
+          end
+          if all_num then
+            local fn_result = fn(unpack(args))
+            if type(fn_result) == "number" then
+              if fn_result ~= fn_result then return nil end
+              if fn_result == math.huge or fn_result == -math.huge then return nil end
+            end
+            return fn_result
+          else
+            local parts = {}
+            for _, a in ipairs(args) do
+              parts[#parts + 1] = fmt_val(a)
+            end
+            return id .. "(" .. table.concat(parts, ",") .. ")"
+          end
+        else
+          -- Unknown function (e.g. crv, fcn, dfcn): preserve as string
+          local parts = {}
+          for _, a in ipairs(args) do
+            parts[#parts + 1] = fmt_val(a)
+          end
+          return id .. "(" .. table.concat(parts, ",") .. ")"
+        end
+      else
+        local c = CONSTANTS[id:lower()]
+        if c then return c end
+        return id
+      end
+    else
+      return nil
+    end
+  end
+
+  parse_power = function()
+    local left = parse_factor()
+    if left == nil then return nil end
+    skip_ws()
+    while pos <= len and s:sub(pos, pos) == "^" do
+      pos = pos + 1
+      local right = parse_factor()
+      if right == nil then return nil end
+      if is_num(left) and is_num(right) then
+        if left == 0 and right < 0 then return nil end
+        left = left ^ right
+      else
+        left = fmt_val(left) .. "^" .. fmt_val(right)
+      end
+      skip_ws()
+    end
+    return left
+  end
+
+  parse_term = function()
+    local left = parse_power()
+    if left == nil then return nil end
+    skip_ws()
+    while true do
+      local ch = s:sub(pos, pos)
+      if ch == "*" then
+        pos = pos + 1
+        local right = parse_power()
+        if right == nil then return nil end
+        if is_num(left) and is_num(right) then
+          left = left * right
+        else
+          left = fmt_val(left) .. "*" .. fmt_val(right)
+        end
+      elseif ch == "/" then
+        pos = pos + 1
+        local right = parse_power()
+        if right == nil then return nil end
+        if is_num(left) and is_num(right) then
+          if right == 0 then return nil end
+          left = left / right
+        else
+          left = fmt_val(left) .. "/" .. fmt_val(right)
+        end
+      else
+        break
+      end
+      skip_ws()
+    end
+    return left
+  end
+
+  parse_expr = function()
+    local left = parse_term()
+    if left == nil then return nil end
+    skip_ws()
+    while true do
+      local ch = s:sub(pos, pos)
+      if ch == "+" then
+        pos = pos + 1
+        local right = parse_term()
+        if right == nil then return nil end
+        if is_num(left) and is_num(right) then
+          left = left + right
+        else
+          left = fmt_val(left) .. "+" .. fmt_val(right)
+        end
+      elseif ch == "-" then
+        pos = pos + 1
+        local right = parse_term()
+        if right == nil then return nil end
+        if is_num(left) and is_num(right) then
+          left = left - right
+        else
+          left = fmt_val(left) .. "-" .. fmt_val(right)
+        end
+      else
+        break
+      end
+      skip_ws()
+    end
+    return left
+  end
+
+  local result = parse_expr()
+  skip_ws()
+  if pos <= len or result == nil then return nil end
+  return result
+end
+
 -- Falls back to eval_expr_with_functions for expressions containing
 -- function names (sin, cos, H, min, max, etc.) or constants (pi).
 local function try_eval_numeric(expr)
@@ -1845,6 +2331,11 @@ local function try_eval_numeric(expr)
   current_eval_error = nil
   local src = trim(expr or "")
   if src == "" then
+    return nil
+  end
+  -- Skip Impetus intrinsic function calls (fcn, crv, dfcn) that have no
+  -- Lua equivalent and should be preserved as-is.
+  if src:find("fcn%(") or src:find("crv%(") or src:find("dfcn%(") then
     return nil
   end
   local result
@@ -1874,6 +2365,22 @@ local function simplify_numeric_text(text)
   local s = text or ""
   local eval_errors = {}
 
+  -- Special handling for control directives: simplify only the trailing expression
+  -- e.g. ~repeat %a+1  →  ~repeat 12
+  local directive, rest = trim(s):match("^(~%S+)%s+(.*)$")
+  if directive and rest then
+    if rest:find("[%d%+%-%*/%^%(%)%[%].]") then
+      local num = try_eval_numeric(rest)
+      if current_eval_error then
+        current_eval_error = nil
+      end
+      if num then
+        return directive .. " " .. num
+      end
+    end
+    return s
+  end
+
   -- Simplify bracket expressions
   s = s:gsub("%[([^%[%]]-)%]", function(expr)
     local num = try_eval_numeric(expr)
@@ -1887,12 +2394,16 @@ local function simplify_numeric_text(text)
     return "[" .. expr .. "]"
   end)
 
-  -- Simplify fields: split by comma, evaluate each non-literal field
+  -- Simplify fields: split by comma (top-level only, skip commas inside parens),
+  -- evaluate each non-literal field
   local fields = {}
   local any_changed = false
-  for field in (s .. ","):gmatch("(.-),") do
+  local depth = 0
+  local field_start = 1
+  local function process_field(field)
     local ft = trim(field)
-    if ft ~= "" and not is_plain_numeric_literal(ft) then
+    if ft ~= "" and not is_plain_numeric_literal(ft) and not ft:match('^".*"$') and not ft:find("=")
+       and not ft:match("^~") and ft:find("[%d%+%-%*/%^%(%)%[%].]") then
       local num = try_eval_numeric(ft)
       if current_eval_error then
         table.insert(eval_errors, current_eval_error)
@@ -1904,19 +2415,41 @@ local function simplify_numeric_text(text)
         fields[#fields + 1] = lead .. num .. trail
         any_changed = true
       else
-        fields[#fields + 1] = field
+        -- Fallback: partial simplification for expressions with unknown variables
+        local simplified = partial_eval_expr(ft)
+        if simplified and tostring(simplified) ~= ft then
+          local lead = field:match("^(%s*)")
+          local trail = field:match("(%s*)$")
+          fields[#fields + 1] = lead .. tostring(simplified) .. trail
+          any_changed = true
+        else
+          fields[#fields + 1] = field
+        end
       end
     else
       fields[#fields + 1] = field
     end
   end
+  for i = 1, #s do
+    local ch = s:sub(i, i)
+    if ch == "(" then
+      depth = depth + 1
+    elseif ch == ")" then
+      depth = depth - 1
+    elseif ch == "," and depth == 0 then
+      process_field(s:sub(field_start, i - 1))
+      field_start = i + 1
+    end
+  end
+  process_field(s:sub(field_start))
   if any_changed then
     s = table.concat(fields, ",")
   end
 
   -- Simplify whole line if no commas
   local whole = trim(s)
-  if whole ~= "" and whole:find(",", 1, true) == nil and not is_plain_numeric_literal(whole) then
+  if whole ~= "" and whole:find(",", 1, true) == nil and not is_plain_numeric_literal(whole)
+     and whole:find("[%d%+%-%*/%^%(%)%[%].]") then
     local num = try_eval_numeric(whole)
     if current_eval_error then
       table.insert(eval_errors, current_eval_error)
@@ -1926,6 +2459,13 @@ local function simplify_numeric_text(text)
       local lead = s:match("^(%s*)")
       local trail = s:match("(%s*)$")
       return lead .. num .. trail
+    end
+    -- Fallback: partial simplification for expressions with unknown variables
+    local simplified = partial_eval_expr(whole)
+    if simplified and tostring(simplified) ~= whole then
+      local lead = s:match("^(%s*)")
+      local trail = s:match("(%s*)$")
+      return lead .. tostring(simplified) .. trail
     end
   end
 
@@ -1957,9 +2497,123 @@ local function refresh_buffer_analysis(buf)
   require("impetus.ref_marks").update(buf)
 end
 
+-- ~repeat block expansion helpers for re -c --------------------------------
+
+local function find_matching_end_repeat(lines, start_idx)
+  local depth = 1
+  for i = start_idx + 1, #lines do
+    local t = trim(strip_number_prefix(lines[i] or ""))
+    if t:match("^~repeat%f[%A]") then
+      depth = depth + 1
+    elseif t:match("^~end_repeat%f[%A]") then
+      depth = depth - 1
+      if depth == 0 then
+        return i
+      end
+    end
+  end
+  return nil
+end
+
+-- Recursively expand a ~repeat block starting at start_idx.
+-- loop_vars is a table like { r1 = 3, r2 = 7, ... }.
+-- Returns (expanded_lines, end_idx) or (nil, nil) on error.
+local function expand_repeat_block(lines, start_idx, loop_vars)
+  loop_vars = loop_vars or {}
+  local t = trim(strip_number_prefix(lines[start_idx] or ""))
+  local repeat_count = t:match("^~repeat%s+(%d+)")
+  if not repeat_count then
+    return nil, nil
+  end
+  local count = tonumber(repeat_count)
+  if not count or count <= 0 then
+    return nil, nil
+  end
+  local match_end = find_matching_end_repeat(lines, start_idx)
+  if not match_end then
+    return nil, nil
+  end
+
+  local depth = 0
+  for _ in pairs(loop_vars) do
+    depth = depth + 1
+  end
+  local var_name = "r" .. (depth + 1)
+
+  local result = {}
+  for n = 1, count do
+    local new_vars = vim.tbl_extend("force", {}, loop_vars)
+    new_vars[var_name] = n
+    local j = start_idx + 1
+    while j < match_end do
+      local line = lines[j]
+      local inner_t = trim(strip_number_prefix(line or ""))
+      local inner_count = inner_t:match("^~repeat%s+(%d+)")
+      if inner_count then
+        local inner_expanded, inner_end = expand_repeat_block(lines, j, new_vars)
+        if inner_expanded then
+          for _, nl in ipairs(inner_expanded) do
+            table.insert(result, nl)
+          end
+          j = inner_end + 1
+        else
+          table.insert(result, line)
+          j = j + 1
+        end
+      else
+        -- Replace rN variables (safe: r1 won't match inside r10)
+        local new_line = line
+        new_line = new_line:gsub("r(%d+)", function(idx)
+          local var = "r" .. idx
+          if new_vars[var] ~= nil then
+            return tostring(new_vars[var])
+          end
+          return "r" .. idx
+        end)
+        -- Strip leading indentation from ~repeat block nesting
+        new_line = trim(new_line)
+        -- Simplify numeric expressions in the generated line
+        new_line = simplify_numeric_text_fixed_point(new_line, 4)
+        table.insert(result, new_line)
+        j = j + 1
+      end
+    end
+  end
+  return result, match_end
+end
+
+-- Expand all top-level ~repeat blocks in the buffer.
+local function expand_all_repeats(lines)
+  local result = {}
+  local i = 1
+  while i <= #lines do
+    local line = lines[i]
+    local t = trim(strip_number_prefix(line or ""))
+    local repeat_count = t:match("^~repeat%s+(%d+)")
+    if repeat_count then
+      local expanded, match_end = expand_repeat_block(lines, i, {})
+      if expanded then
+        for _, nl in ipairs(expanded) do
+          table.insert(result, nl)
+        end
+        i = match_end + 1
+      else
+        table.insert(result, line)
+        i = i + 1
+      end
+    else
+      table.insert(result, line)
+      i = i + 1
+    end
+  end
+  return result
+end
+
 local function replace_params_in_buffer(mode)
   mode = mode or "ref"
-  local apply_arith = (mode == "arith" or mode == "all")
+  local apply_arith = (mode == "arith" or mode == "all" or mode == "repeat")
+  local replace_defs = (mode == "all")
+  local expand_repeat = (mode == "repeat")
   local replace_defs = (mode == "all")
   local eval_fn = (mode == "all") and eval_expr_with_functions or try_eval_numeric
   local math_errors = {}
@@ -1973,23 +2627,76 @@ local function replace_params_in_buffer(mode)
   local buf = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local vars, blocks = build_param_tables(lines, vim.api.nvim_buf_get_name(buf))
-  if vim.tbl_count(vars) == 0 and not replace_defs then
+  if vim.tbl_count(vars) == 0 and not apply_arith then
     return 0, {}
   end
   local entries = {}
 
-  -- Mark parameter definition rows (*PARAMETER only; *PARAMETER_DEFAULT is read-only defaults)
+  -- Mark parameter definition rows (*PARAMETER and *PARAMETER_DEFAULT)
   -- Skip meta rows (~if, ~else, ~endif) so they get %param substitution even inside *PARAMETER
   local row_in_param = {}
   for _, b in ipairs(blocks) do
     local ku = (b.keyword or ""):upper()
-    if ku == "*PARAMETER" then
+    if ku == "*PARAMETER" or ku == "*PARAMETER_DEFAULT" then
       for r = b.start_row, b.end_row do
         local t = trim(strip_number_prefix(lines[r] or ""))
         if t ~= "" and t:sub(1, 1) ~= "~" then
           row_in_param[r] = true
         end
       end
+    end
+  end
+
+  -- Mark *INCLUDE block rows (file paths like material_fsp.k must not be
+  -- treated as arithmetic expressions).
+  local row_in_include = {}
+  for _, b in ipairs(blocks) do
+    local ku = (b.keyword or ""):upper()
+    if ku == "*INCLUDE" then
+      for r = b.start_row, b.end_row do
+        row_in_include[r] = true
+      end
+    end
+  end
+
+  -- Mark *FUNCTION expression rows (row 2+ inside *FUNCTION blocks)
+  -- These contain coordinate variables (x, y, z, t) and crv()/fcn() calls;
+  -- arithmetic simplification must be skipped.
+  -- Note: scan directly rather than relying on split_keyword_blocks,
+  -- because *FUNCTION blocks may contain nested *TABLE / *END_TABLE.
+  local function_expr_rows = {}
+  local in_function = false
+  local function_data_count = 0
+  for r = 1, #lines do
+    local t = trim(strip_number_prefix(lines[r] or ""))
+    if t:match("^%*FUNCTION%f[%A]") then
+      in_function = true
+      function_data_count = 0
+    elseif t:match("^%*END_FUNCTION%f[%A]") then
+      in_function = false
+      function_data_count = 0
+    elseif in_function then
+      -- Skip nested keyword rows (e.g. *TABLE, *END_TABLE) and comments
+      if not t:match("^%*") and t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" and not t:match('^".*"$') then
+        function_data_count = function_data_count + 1
+        if function_data_count >= 2 then
+          function_expr_rows[r] = true
+        end
+      end
+    end
+  end
+
+  -- Mark rows inside ~repeat blocks (they contain loop variables r1, r2, etc.)
+  local repeat_block_rows = {}
+  local in_repeat = false
+  for r = 1, #lines do
+    local t = trim(strip_number_prefix(lines[r] or ""))
+    if t:match("^~repeat%f[%A]") then
+      in_repeat = true
+    elseif t:match("^~end_repeat%f[%A]") then
+      in_repeat = false
+    elseif in_repeat then
+      repeat_block_rows[r] = true
     end
   end
 
@@ -2079,34 +2786,47 @@ local function replace_params_in_buffer(mode)
 
     -- Decide whether to replace this line
     local should_replace = not is_param_row or replace_defs
+    local is_function_expr = function_expr_rows[i]
+    local is_repeat_data = repeat_block_rows[i]
+    local do_arith = apply_arith and not is_function_expr and not is_repeat_data
 
     if should_replace then
       local t = trim(strip_number_prefix(line))
       if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" then
         -- Fast skip for plain lines with no params when not doing arithmetic
-        if not apply_arith and not line:find("%%") and not line:find("%[") then
+        if not do_arith and not line:find("%%") and not line:find("%[") then
           -- nothing to do
         else
           local new_line = line
-          -- Replace [expr]
-          new_line = new_line:gsub("%[([^%[%]]-)%]", function(expr)
-            local replaced = substitute_vars(expr)
-            if apply_arith then
-              local num = eval_fn(replaced)
-              collect_eval_error(i, replaced)
-              if num then return num end
-            end
-            return replaced
-          end)
-          if cycle_detected then break end
-          -- Replace %name
-          new_line = new_line:gsub("%%([%a_][%w_]*)", function(n)
-            local val = current_vars[n]
-            if val then return val end
-            return "%" .. n
-          end)
+          -- Global [expr] and %name replacement
+          -- For re -b: skip on parameter rows to preserve %name = format
+          if mode ~= "all" or not is_param_row then
+            -- Replace [expr]
+            new_line = new_line:gsub("%[([^%[%]]-)%]", function(expr)
+              local replaced = substitute_vars(expr)
+              if do_arith then
+                local num = eval_fn(replaced)
+                collect_eval_error(i, replaced)
+                if num then return num end
+              end
+              -- Partial simplification: always try, even inside ~repeat blocks
+              -- (loop variables like r1, r2 are preserved as unknown identifiers)
+              local simplified = partial_eval_expr(replaced)
+              if simplified then
+                return simplified
+              end
+              return replaced
+            end)
+            if cycle_detected then break end
+            -- Replace %name
+            new_line = new_line:gsub("%%([%a_][%w_]*)", function(n)
+              local val = current_vars[n]
+              if val then return val end
+              return "%" .. n
+            end)
+          end
           -- For re -b on definition rows: evaluate RHS of each assignment
-          if is_param_row and replace_defs and apply_arith then
+          if is_param_row and replace_defs and do_arith then
             local assignments = parse_assignments_from_line(new_line)
             -- Process from right to left to avoid position shifts after replacement
             for idx = #assignments, 1, -1 do
@@ -2135,6 +2855,7 @@ local function replace_params_in_buffer(mode)
                 local tail = new_line:sub(e + effective_end + 1, val_end) .. new_line:sub(val_end + 1)
                 local full_val = trim(raw_val:sub(1, effective_end))
                 if full_val ~= "" then
+                  full_val = substitute_vars(full_val)
                   local num = eval_fn(full_val)
                   collect_eval_error(i, full_val)
                   if num then
@@ -2145,19 +2866,7 @@ local function replace_params_in_buffer(mode)
             end
           end
           -- Simplify numeric expressions
-          if apply_arith and new_line ~= line then
-            if mode == "all" then
-              local whole = trim(new_line)
-              if whole ~= "" and whole:find(",", 1, true) == nil then
-                local num = eval_fn(whole)
-                collect_eval_error(i, whole)
-                if num then
-                  local lead = new_line:match("^(%s*)")
-                  local trail = new_line:match("(%s*)$")
-                  new_line = lead .. num .. trail
-                end
-              end
-            end
+          if do_arith and new_line ~= line and (mode ~= "all" or not is_param_row) then
             new_line = simplify_numeric_text_fixed_point(new_line, 4)
             collect_eval_error(i, new_line)
           end
@@ -2178,18 +2887,29 @@ local function replace_params_in_buffer(mode)
   -- Second pass for apply_arith: resolve nested numeric expressions
   if not cycle_detected and apply_arith then
     for i, line in ipairs(lines) do
-      local t = trim(strip_number_prefix(line))
-      if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" then
-        local new_line = simplify_numeric_text_fixed_point(line, 4)
-        collect_eval_error(i, line)
-        if new_line ~= line then
-          entries[#entries + 1] = {
-            row = i,
-            before = line,
-            after = new_line,
-          }
-          lines[i] = new_line
-          changed = changed + 1
+      if repeat_block_rows[i] or row_in_param[i] or row_in_include[i] then
+        -- skip ~repeat block rows, parameter rows, and *INCLUDE rows
+      else
+        local t = trim(strip_number_prefix(line))
+        if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" then
+          local new_line = simplify_numeric_text_fixed_point(line, 4)
+          -- Skip error collection for *FUNCTION expression rows:
+          -- unknown variables (x, y, z, t) and crv()/fcn() calls are expected.
+          if not function_expr_rows[i] then
+            collect_eval_error(i, line)
+          else
+            -- Discard expected errors so they don't leak to subsequent rows
+            current_eval_error = nil
+          end
+          if new_line ~= line then
+            entries[#entries + 1] = {
+              row = i,
+              before = line,
+              after = new_line,
+            }
+            lines[i] = new_line
+            changed = changed + 1
+          end
         end
       end
     end
@@ -2226,6 +2946,33 @@ local function replace_params_in_buffer(mode)
       msgs[#msgs + 1] = string.format("L%d: %s (%s)", e.row, e.reason, e.expr)
     end
     vim.notify("Math evaluation errors:\n" .. table.concat(msgs, "\n"), vim.log.levels.ERROR)
+  end
+
+  -- Expand ~repeat blocks for re -c
+  if expand_repeat then
+    local before_count = #lines
+    local before_lines = {}
+    for _, l in ipairs(lines) do
+      table.insert(before_lines, l)
+    end
+    lines = expand_all_repeats(lines)
+    local has_repeat_changes = (#lines ~= before_count)
+    if not has_repeat_changes then
+      for i = 1, #lines do
+        if lines[i] ~= before_lines[i] then
+          has_repeat_changes = true
+          break
+        end
+      end
+    end
+    if has_repeat_changes then
+      changed = changed + 1
+      entries[#entries + 1] = {
+        row = 1,
+        before = "(~repeat blocks)",
+        after = string.format("expanded to %d lines", #lines),
+      }
+    end
   end
 
   if changed > 0 then
@@ -2317,9 +3064,11 @@ local function show_cheatsheet_popup()
         { ":clean", "Clear pairX markers and lint diagnostics" },
         { ":clean -c", "Warm clean: remove comments/blank/noise rows (smart keep)" },
         { ":clean -a", "Full clean: pairX + warm clean + prune + align PARAMETER defs" },
+        { ":clean -s", "Simple beautify: align columns & normalize spacing (no delete)" },
         { ":re", "Replace custom params with values (basic ordered replace)" },
         { ":re -a", "Replace + evaluate numeric expressions" },
         { ":re -b", "Replace all (defs+refs) + eval with intrinsic functions" },
+        { ":re -c", "Expand ~repeat blocks into concrete rows (re -a + unroll)" },
         { ":Cblock", "Check unmatched control block pairs" },
         { ":Update", "Force refresh index, lint, and ref marks" },
         { ":gui", "Open in Impetus GUI" },
@@ -2499,7 +3248,27 @@ function M.register()
 
   vim.api.nvim_create_user_command("ImpetusLint", function()
     local diagnostics = lint.run(0)
-    vim.notify("Impetus lint finished. Diagnostics: " .. tostring(#diagnostics), vim.log.levels.INFO)
+    local counts = { error = 0, warning = 0, suspicion = 0 }
+    for _, d in ipairs(diagnostics) do
+      if d.severity == vim.diagnostic.severity.ERROR then
+        counts.error = counts.error + 1
+      elseif d.severity == vim.diagnostic.severity.WARN then
+        counts.warning = counts.warning + 1
+      elseif d.severity == vim.diagnostic.severity.HINT then
+        counts.suspicion = counts.suspicion + 1
+      end
+    end
+    local msg = string.format(
+      "Impetus lint finished.  error=%d  warning=%d  suspicion=%d  (total=%d)",
+      counts.error, counts.warning, counts.suspicion, #diagnostics
+    )
+    if counts.error > 0 then
+      vim.notify(msg, vim.log.levels.WARN)
+    elseif counts.warning > 0 then
+      vim.notify(msg, vim.log.levels.WARN)
+    else
+      vim.notify(msg, vim.log.levels.INFO)
+    end
   end, {})
 
   vim.api.nvim_create_user_command("ImpetusHelpOpen", function()
@@ -2605,7 +3374,20 @@ function M.register()
       )
       return
     end
-    vim.notify("Usage: :clean | :clean -c | :clean -a", vim.log.levels.WARN)
+    if args == "-s" then
+      local changed, entries = simple_beautify_buffer()
+      local log_lines = { string.format("[summary] changed=%d", changed) }
+      if #entries > 0 then
+        log_lines[#log_lines + 1] = "[beautified]"
+        for _, e in ipairs(entries) do
+          log_lines[#log_lines + 1] = string.format("  L%-5d %-16s  %s  ->  %s", e.row, e.keyword, trim(e.old_line), trim(e.new_line))
+        end
+      end
+      local log_path = append_operation_log("clean -s", log_lines)
+      vim.notify(string.format("Impetus clean -s done. Beautified: %d | log: %s", changed, vim.fn.fnamemodify(log_path, ":~:.")), vim.log.levels.INFO)
+      return
+    end
+    vim.notify("Usage: :clean | :clean -c | :clean -a | :clean -s", vim.log.levels.WARN)
   end
 
   vim.api.nvim_create_user_command("ImpetusClean", run_clean_command, { nargs = "*" })
@@ -2613,7 +3395,9 @@ function M.register()
 
   local function parse_re_args(args_str)
     local args = trim(args_str or "")
-    if args:find("%f[%S]%-b%f[%s]") ~= nil or args == "-b" then
+    if args:find("%f[%S]%-c%f[%s]") ~= nil or args == "-c" then
+      return "repeat", "re -c"
+    elseif args:find("%f[%S]%-b%f[%s]") ~= nil or args == "-b" then
       return "all", "re -b"
     elseif args:find("%f[%S]%-a%f[%s]") ~= nil or args == "-a" then
       return "arith", "re -a"

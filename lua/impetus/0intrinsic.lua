@@ -99,7 +99,7 @@ end
 
 function M.apply_syntax_for_current_buffer()
   local ft = vim.bo.filetype
-  if ft ~= "impetus" and ft ~= "kwt" then
+  if ft ~= "impetus" then
     return
   end
   if vim.b.impetus_intrinsic_applied == 1 then

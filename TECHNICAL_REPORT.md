@@ -220,7 +220,7 @@ Implement `build_cross_file_param_index(bufnr)` in `analysis.lua`. It recursivel
 
 1. The current buffer
 2. All `*INCLUDE` files (recursive)
-3. All other open `impetus`/`kwt` buffers
+3. All other open `impetus` buffers
 
 ### 5.3 Implementation Path
 
@@ -229,7 +229,7 @@ Implement `build_cross_file_param_index(bufnr)` in `analysis.lua`. It recursivel
   1. Two mutually recursive closures: `search_buf(bn)` and `search_file(path)`.
   2. `search_buf` builds the buffer index, extracts `params.defs` and `params.refs`, then recurses into includes.
   3. `search_file` handles disk-only files by reading via `io.open`, using `build_params_from_lines()` (a lightweight parameter scanner) to avoid creating buffers.
-  4. After the root buffer, all other open `impetus`/`kwt` buffers are also searched.
+  4. After the root buffer, all other open `impetus` buffers are also searched.
 
 ### 5.4 Result
 

@@ -5,7 +5,7 @@ Neovim plugin scaffold for Impetus keyword authoring, based on `commands.help`.
 ## Features (v0)
 
 - Filetype detection for `*.key`, `*.k`, `*.imp`, `*.inp`, `commands.help`
-- Compatibility with `filetype=kwt` (reuses the same syntax and tooling)
+
 - Custom dark, high-contrast Impetus highlight palette (image-style magenta/cyan/green/red accents)
 - Syntax highlighting for keywords, directives, parameters, repeat vars
 - Parse `commands.help` into an in-memory keyword database

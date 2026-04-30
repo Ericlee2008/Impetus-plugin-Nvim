@@ -2,7 +2,7 @@
 
 **Version:** Current (post-v0)  
 **Target:** LS-DYNA / Impetus input file authoring in Neovim  
-**Filetypes:** `impetus`, `kwt`  
+**Filetypes:** `impetus`  
 **Default Local Leader:** `,`
 
 ---
@@ -83,7 +83,7 @@ The plugin automatically sets `filetype=impetus` for:
 - `*.inp`
 - `commands.help`
 
-Buffers manually set to `impetus` or `kwt` also receive all plugin behaviors.
+Buffers manually set to `impetus` also receive all plugin behaviors.
 
 ---
 
@@ -557,7 +557,7 @@ The log is **append-only** and never truncated automatically.
 
 `build_cross_file_param_index()` recursively scans:
 1. All `*INCLUDE` files reachable from the current buffer
-2. All currently open buffers with `filetype=impetus` or `filetype=kwt`
+2. All currently open buffers with `filetype=impetus`
 
 It merges:
 - **Definitions** (`*PARAMETER`, `*PARAMETER_DEFAULT`) from all sources
@@ -580,7 +580,7 @@ Set these in your `setup({...})` call:
 | `auto_load` | `true` | Auto-load database on startup |
 | `cache_file` | `nil` | Custom cache path |
 | `lint_on_save` | `true` | Run `:Ccheck` on `:w` |
-| `filetypes` | `{"impetus", "kwt"}` | Filetypes to attach |
+| `filetypes` | `{"impetus"}` | Filetypes to attach |
 | `blink_retrigger_on_star` | `true` | Retrigger blink on `*` in insert mode |
 | `blink_menu_keys` | `false` | Enable `j`/`k`/`<Space>` in blink menu |
 | `tab_field_jump` | `true` | `<Tab>` jumps fields instead of inserting tab |
