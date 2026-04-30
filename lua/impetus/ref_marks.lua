@@ -227,7 +227,7 @@ function M.update_debounced(bufnr, delay)
     if timers[bufnr] == timer then
       timers[bufnr] = nil
     end
-    timer:close()
+    pcall(timer.close, timer)
     if vim.api.nvim_buf_is_valid(bufnr) then
       M.update(bufnr)
     end
