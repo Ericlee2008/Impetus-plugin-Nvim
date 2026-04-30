@@ -442,6 +442,15 @@ function M.open_current()
     return false, err
   end
 
+  -- Debug: show payload summary
+  local pts_info = ""
+  if payload.points and #payload.points > 0 then
+    pts_info = string.format(", points=%d (first=%s)", #payload.points,
+      vim.inspect(payload.points[1]))
+  end
+  vim.notify(string.format("[geometry_preview] %s | shape=%s%s",
+    payload.keyword, payload.shape or "?", pts_info), vim.log.levels.INFO)
+
   local opts = config.get().geometry_preview or {}
   local script = opts.viewer_script
   if not script or script == "" then
@@ -455,6 +464,10 @@ function M.open_current()
   local json = vim.json.encode(payload)
   vim.fn.writefile({ json }, payload_path)
 
+  -- Also write to a fixed path for manual inspection
+  local debug_path = vim.fn.stdpath("cache") .. "/impetus_geometry_preview.json"
+  vim.fn.writefile({ json }, debug_path)
+
   local python = opts.python_exe or "python"
   local args = opts.python_args or {}
   local cmd = { python }
@@ -464,12 +477,34 @@ function M.open_current()
   cmd[#cmd + 1] = script
   cmd[#cmd + 1] = payload_path
 
+  local cmd_str = table.concat(cmd, " ")
+  vim.notify("[geometry_preview] cmd: " .. cmd_str, vim.log.levels.INFO)
+
+  local stderr_lines = {}
   local ret = vim.fn.jobstart(cmd, {
     detach = true,
+    on_stderr = function(_, data)
+      if data then
+        for _, line in ipairs(data) do
+          if line and line ~= "" then
+            stderr_lines[#stderr_lines + 1] = line
+          end
+        end
+      end
+    end,
+    on_exit = function(_, code)
+      if code ~= 0 then
+        local msg = table.concat(stderr_lines, "\n")
+        vim.schedule(function()
+          vim.notify("[geometry_preview] viewer exited with code " .. code .. ":\n" .. msg, vim.log.levels.ERROR)
+        end)
+      end
+    end,
   })
   if ret <= 0 then
-    return false, "failed to launch geometry viewer"
+    return false, "failed to launch geometry viewer (jobstart returned " .. tostring(ret) .. ")"
   end
+  vim.notify("[geometry_preview] viewer launched (job id=" .. ret .. ")", vim.log.levels.INFO)
   return true
 end
 
