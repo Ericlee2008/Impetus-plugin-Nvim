@@ -1277,8 +1277,6 @@ local function simple_beautify_buffer()
       formatted = normalize_expression_lines(formatted)
     end
 
-    formatted = normalize_repeat_indentation(formatted)
-
     if formatted then
       for idx, new_line in ipairs(formatted) do
         local row = b.start_row + idx
