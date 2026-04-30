@@ -931,7 +931,7 @@ local function setup_filetype_behaviors()
 
   vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
     group = group,
-    pattern = { "*.k", "*.key" }
+    pattern = { "*.k", "*.key" },
     callback = function(ev)
       ensure_impetus_filetype(ev.buf)
       attach_behaviors(ev.buf)
@@ -954,7 +954,7 @@ local function setup_filetype_behaviors()
   if config.get().lint_on_save then
     vim.api.nvim_create_autocmd("BufWritePost", {
       group = group,
-      pattern = { "*.key", "*.k" }
+      pattern = { "*.key", "*.k" },
       callback = function(ev)
         analysis.invalidate_cross_file_cache_for_path(vim.api.nvim_buf_get_name(ev.buf))
         lint.run(ev.buf)
@@ -1014,7 +1014,7 @@ local function setup_filetype_behaviors()
   -- our highlight palette whenever entering an Impetus-like buffer.
   vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter", "FileType" }, {
     group = group,
-    pattern = { "*.k", "*.key", "impetus" }
+    pattern = { "*.k", "*.key", "impetus" },
     callback = function(ev)
       ensure_impetus_filetype(ev.buf)
       local ft = vim.bo[ev.buf].filetype
@@ -1028,7 +1028,7 @@ local function setup_filetype_behaviors()
   -- before normal editing begins. Re-apply once after UI is fully ready.
   vim.api.nvim_create_autocmd({ "VimEnter", "BufReadPost" }, {
     group = group,
-    pattern = { "*.k", "*.key" }
+    pattern = { "*.k", "*.key" },
     callback = function(ev)
       vim.schedule(function()
         refresh_main_visuals(ev.buf)
