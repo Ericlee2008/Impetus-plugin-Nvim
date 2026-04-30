@@ -36,7 +36,7 @@
 
 ## 1. Overview
 
-`impetus.nvim` is a Neovim plugin that turns your editor into an IDE for Impetus / LS-DYNA keyword input files (`*.k`, `*.key`, `*.imp`, `*.inp`). It provides:
+`impetus.nvim` is a Neovim plugin that turns your editor into an IDE for Impetus / LS-DYNA keyword input files (`*.k`, `*.key`). It provides:
 
 - **Syntax highlighting** with a custom dark, high-contrast palette (magenta/cyan/green/red accents)
 - **Intelligent completion** for keywords, parameters, object IDs, and enumerated options
@@ -68,6 +68,7 @@
 ```
 
 The plugin loads the keyword database in this priority:
+
 1. `help_file` (if provided and readable)
 2. Cached database (`cache_file` or auto-detected)
 3. Bundled `data/keywords.json`
@@ -77,10 +78,9 @@ The plugin loads the keyword database in this priority:
 ## 3. Filetype Detection
 
 The plugin automatically sets `filetype=impetus` for:
+
 - `*.k`
 - `*.key`
-- `*.imp`
-- `*.inp`
 - `commands.help`
 
 Buffers manually set to `impetus` also receive all plugin behaviors.
@@ -93,64 +93,64 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 
 ### 4.1 Core Editing
 
-| Shortcut | Mode | Description |
-|----------|------|-------------|
-| `,c` | Normal | Toggle comment/uncomment current keyword block |
-| `dk` | Normal | Delete (cut) current keyword or control block to register |
-| `,y` | Normal | Yank current block to register |
-| `,j` | Normal | Move current keyword block down |
-| `,k` | Normal | Move current keyword block up |
-| `<Tab>` | Insert/Normal | Jump to next parameter field (when `tab_field_jump = true`) |
-| `,I` | Normal | Insert keyword template at cursor |
-| `,Q` | Normal | Close popup / quickfix |
-| `gh` | Normal | Show intrinsic function/variable hover docs |
-| `<C-Space>` | Insert | Trigger Impetus omnifunc completion |
-| `<Space>` | Insert | Accept completion item (when menu visible) |
+| Shortcut    | Mode          | Description                                                 |
+| ----------- | ------------- | ----------------------------------------------------------- |
+| `,c`        | Normal        | Toggle comment/uncomment current keyword block              |
+| `dk`        | Normal        | Delete (cut) current keyword or control block to register   |
+| `,y`        | Normal        | Yank current block to register                              |
+| `,j`        | Normal        | Move current keyword block down                             |
+| `,k`        | Normal        | Move current keyword block up                               |
+| `<Tab>`     | Insert/Normal | Jump to next parameter field (when `tab_field_jump = true`) |
+| `,I`        | Normal        | Insert keyword template at cursor                           |
+| `,Q`        | Normal        | Close popup / quickfix                                      |
+| `gh`        | Normal        | Show intrinsic function/variable hover docs                 |
+| `<C-Space>` | Insert        | Trigger Impetus omnifunc completion                         |
+| `<Space>`   | Insert        | Accept completion item (when menu visible)                  |
 
 ### 4.2 Navigation
 
-| Shortcut | Mode | Description |
-|----------|------|-------------|
-| `,n` | Normal | Jump to next keyword |
-| `,N` | Normal | Jump to previous keyword |
-| `gd` | Normal | Jump to definition (parameter, object ID, or `fcn(id)`/`crv(id)`) |
-| `gr` | Normal | List references (popup or quickfix; supports `fcn(id)`/`crv(id)`) |
-| `%` | Normal | Match jump (`~if`/`~end_if`, brackets) |
-| `,m` | Normal | Jump to matching control block |
-| `,b` | Normal | Check unmatched control blocks |
-| `,o` | Normal | Open `*INCLUDE` / `*SCRIPT_PYTHON` file under cursor (left split) |
-| `,O` | Normal | Open current file in Impetus GUI |
+| Shortcut | Mode   | Description                                                       |
+| -------- | ------ | ----------------------------------------------------------------- |
+| `,n`     | Normal | Jump to next keyword                                              |
+| `,N`     | Normal | Jump to previous keyword                                          |
+| `gd`     | Normal | Jump to definition (parameter, object ID, or `fcn(id)`/`crv(id)`) |
+| `gr`     | Normal | List references (popup or quickfix; supports `fcn(id)`/`crv(id)`) |
+| `%`      | Normal | Match jump (`~if`/`~end_if`, brackets)                            |
+| `,m`     | Normal | Jump to matching control block                                    |
+| `,b`     | Normal | Check unmatched control blocks                                    |
+| `,o`     | Normal | Open `*INCLUDE` / `*SCRIPT_PYTHON` file under cursor (left split) |
+| `,O`     | Normal | Open current file in Impetus GUI                                  |
 
 ### 4.3 Folding
 
-| Shortcut | Description |
-|----------|-------------|
-| `,f` | Toggle fold all keyword blocks (auto) |
-| `,t` | Toggle fold at current keyword block |
-| `,F` | Toggle fold all control blocks (`~if`/`~repeat`/`~convert`) |
-| `,T` | Toggle fold at current control block |
-| `,z` | Toggle fold all keywords + control blocks |
+| Shortcut | Description                                                 |
+| -------- | ----------------------------------------------------------- |
+| `,f`     | Toggle fold all keyword blocks (auto)                       |
+| `,t`     | Toggle fold at current keyword block                        |
+| `,F`     | Toggle fold all control blocks (`~if`/`~repeat`/`~convert`) |
+| `,T`     | Toggle fold at current control block                        |
+| `,z`     | Toggle fold all keywords + control blocks                   |
 
 ### 4.4 Help & Info
 
-| Shortcut | Description |
-|----------|-------------|
-| `,h` | Toggle right help pane (keyword signature + descriptions) |
-| `,,` | Trigger reference / option completion popup |
-| `,R` | Same as `,,` |
-| `,i` | Toggle info pane (model statistics tree) |
-| `,r` | Reload `commands.help` database |
-| `,u` | Open quick help cheat sheet popup |
-| `K` | Show docs for keyword or parameter under cursor |
-| `,q` | Force quit current window |
+| Shortcut | Description                                               |
+| -------- | --------------------------------------------------------- |
+| `,h`     | Toggle right help pane (keyword signature + descriptions) |
+| `,,`     | Trigger reference / option completion popup               |
+| `,R`     | Same as `,,`                                              |
+| `,i`     | Toggle info pane (model statistics tree)                  |
+| `,r`     | Reload `commands.help` database                           |
+| `,u`     | Open quick help cheat sheet popup                         |
+| `K`      | Show docs for keyword or parameter under cursor           |
+| `,q`     | Force quit current window                                 |
 
 ### 4.5 Blink.cmp Menu Keys (when `blink_menu_keys = true`)
 
-| Key | Behavior |
-|-----|----------|
-| `j` / `k` | Select next / previous item |
-| `<Down>` / `<Up>` | Same as `j` / `k` |
-| `<Space>` | Accept selected item |
+| Key               | Behavior                    |
+| ----------------- | --------------------------- |
+| `j` / `k`         | Select next / previous item |
+| `<Down>` / `<Up>` | Same as `j` / `k`           |
+| `<Space>`         | Accept selected item        |
 
 ---
 
@@ -158,72 +158,72 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 
 ### 5.1 Full Commands
 
-| Command | Arguments | Description |
-|---------|-----------|-------------|
-| `:ImpetusLoadHelp` | `<path>` | Load keyword database from `commands.help` |
-| `:ImpetusReload` | — | Reload the currently cached database |
-| `:ImpetusLint` | — | Run all lint checks on current buffer |
-| `:ImpetusOutline` | — | Open quickfix with all keywords |
-| `:ImpetusParamDef` | `[name]` | Jump to parameter definition (default: cursor) |
-| `:ImpetusParamRefs` | `[name]` | List references for parameter (default: cursor) |
-| `:ImpetusObjects` | — | Open quickfix with object ID registry |
-| `:ImpetusInfo` | — | Toggle info pane |
-| `:ImpetusHelpToggle` | — | Toggle right help pane |
-| `:ImpetusHelpOpen` | — | Open help pane |
-| `:ImpetusHelpClose` | — | Close help pane |
-| `:ImpetusCheatSheet` | — | Open quick help popup |
-| `:ImpetusRefresh` | — | Full plugin + database refresh (`dev_hot_reload`) |
-| `:ImpetusUpdate` | — | Force refresh of index, lint, and ref marks for current buffer |
-| `:ImpetusClean` | `[args]` | Clean command (see §8) |
-| `:ImpetusClear` | `[args]` | Alias for `:ImpetusClean` |
-| `:ImpetusReplaceParams` | `[-a｜-b]` | Replace parameters with values (see §9) |
-| `:ImpetusRefComplete` | — | Trigger reference/option completion |
-| `:ImpetusOpenGUI` | — | Open file in Impetus GUI |
-| `:ImpetusCheckBlocks` | — | Check unmatched `~if`/`~repeat`/`~convert` |
-| `:ImpetusFoldBounds` | — | Show fold boundary analysis |
-| `:ImpetusTryKeywordFold` | — | Try keyword fold on current block |
-| `:ImpetusTryControlFold` | — | Try control fold on current block |
-| `:ImpetusFoldDoctor` | — | Open fold diagnostic view |
-| `:ImpetusGraphInfo` | — | Open object/reference graph summary |
-| `:ImpetusGraphRefs` | `[type:id]` | Show inbound/outbound refs for object |
-| `:ImpetusGraphDeleteCheck` | `[type:id]` | Check if object can be deleted safely |
-| `:ImpetusExportJson` | `<path>` | Export keyword DB to JSON |
-| `:ImpetusExportSnippets` | `<path>` | Export snippet templates to VSCode JSON |
-| `:ImpetusHighlightProbe` | — | Arm syntax-highlight probe (debug) |
+| Command                    | Arguments   | Description                                                    |
+| -------------------------- | ----------- | -------------------------------------------------------------- |
+| `:ImpetusLoadHelp`         | `<path>`    | Load keyword database from `commands.help`                     |
+| `:ImpetusReload`           | —           | Reload the currently cached database                           |
+| `:ImpetusLint`             | —           | Run all lint checks on current buffer                          |
+| `:ImpetusOutline`          | —           | Open quickfix with all keywords                                |
+| `:ImpetusParamDef`         | `[name]`    | Jump to parameter definition (default: cursor)                 |
+| `:ImpetusParamRefs`        | `[name]`    | List references for parameter (default: cursor)                |
+| `:ImpetusObjects`          | —           | Open quickfix with object ID registry                          |
+| `:ImpetusInfo`             | —           | Toggle info pane                                               |
+| `:ImpetusHelpToggle`       | —           | Toggle right help pane                                         |
+| `:ImpetusHelpOpen`         | —           | Open help pane                                                 |
+| `:ImpetusHelpClose`        | —           | Close help pane                                                |
+| `:ImpetusCheatSheet`       | —           | Open quick help popup                                          |
+| `:ImpetusRefresh`          | —           | Full plugin + database refresh (`dev_hot_reload`)              |
+| `:ImpetusUpdate`           | —           | Force refresh of index, lint, and ref marks for current buffer |
+| `:ImpetusClean`            | `[args]`    | Clean command (see §8)                                         |
+| `:ImpetusClear`            | `[args]`    | Alias for `:ImpetusClean`                                      |
+| `:ImpetusReplaceParams`    | `[-a｜-b]`   | Replace parameters with values (see §9)                        |
+| `:ImpetusRefComplete`      | —           | Trigger reference/option completion                            |
+| `:ImpetusOpenGUI`          | —           | Open file in Impetus GUI                                       |
+| `:ImpetusCheckBlocks`      | —           | Check unmatched `~if`/`~repeat`/`~convert`                     |
+| `:ImpetusFoldBounds`       | —           | Show fold boundary analysis                                    |
+| `:ImpetusTryKeywordFold`   | —           | Try keyword fold on current block                              |
+| `:ImpetusTryControlFold`   | —           | Try control fold on current block                              |
+| `:ImpetusFoldDoctor`       | —           | Open fold diagnostic view                                      |
+| `:ImpetusGraphInfo`        | —           | Open object/reference graph summary                            |
+| `:ImpetusGraphRefs`        | `[type:id]` | Show inbound/outbound refs for object                          |
+| `:ImpetusGraphDeleteCheck` | `[type:id]` | Check if object can be deleted safely                          |
+| `:ImpetusExportJson`       | `<path>`    | Export keyword DB to JSON                                      |
+| `:ImpetusExportSnippets`   | `<path>`    | Export snippet templates to VSCode JSON                        |
+| `:ImpetusHighlightProbe`   | —           | Arm syntax-highlight probe (debug)                             |
 
 ### 5.2 Short Aliases (C* Family & Short Forms)
 
-| Alias | Maps To | Description |
-|-------|---------|-------------|
-| `:Ccheck` / `:Cc` / `:Chk` | `:ImpetusLint` | Run lint |
-| `:Chelp` | `:ImpetusCheatSheet` | Quick help popup |
-| `:Ch` | `:ImpetusHelpToggle` | Toggle help pane |
-| `:Cinfo` / `:Ci` | `:ImpetusInfo` | Toggle info pane |
-| `:Cregistry` / `:Cr` | `:ImpetusObjects` | Object registry |
-| `:Crefresh` / `:CR` | `:ImpetusRefresh` | Full refresh |
-| `:Update` | `:ImpetusUpdate` | Force buffer analysis refresh |
-| `:Creload` / `:Crl` | `:ImpetusReload` | Reload database |
-| `:Cgoto` / `:Cg` | `:ImpetusParamDef` | Goto definition |
-| `:Cfind` / `:Cw` | `:ImpetusParamRefs` | Find references |
-| `:Cref` / `:Cf` | `:ImpetusRefComplete` | Ref completion |
-| `:Cgraph` | `:ImpetusGraphInfo` | Graph summary |
-| `:Cgr` | `:ImpetusGraphRefs` | Graph refs |
-| `:Cgdel` | `:ImpetusGraphDeleteCheck` | Delete safety check |
-| `:Cblock` | `:ImpetusCheckBlocks` | Control block check |
-| `:Cfoldbounds` | `:ImpetusFoldBounds` | Fold analysis |
-| `:Ctrykwfold` | `:ImpetusTryKeywordFold` | Try keyword fold |
-| `:Ctryctlfold` | `:ImpetusTryControlFold` | Try control fold |
-| `:Cfolddbg` | `:ImpetusFoldDoctor` | Fold doctor |
-| `:Cgui` / `:Co` / `:Copen` | `:ImpetusOpenGUI` | Open in GUI |
-| `:Re` | `:ImpetusReplaceParams` | Replace params |
-| `:Clean` / `:Clear` / `:Cl` | `:ImpetusClean` | Clean |
-| `:Info` / `:Inf` | `:ImpetusInfo` | Info pane |
-| `:Help` / `:Hp` | `:ImpetusCheatSheet` | Cheat sheet |
-| `:Gui` | `:ImpetusOpenGUI` | Open GUI |
-| `:Obj` | `:ImpetusObjects` | Object registry |
-| `:Refs` | `:ImpetusParamRefs` | References |
-| `:Def` | `:ImpetusParamDef` | Definition |
-| `:Rl` | `:ImpetusReload` | Reload DB |
+| Alias                       | Maps To                    | Description                   |
+| --------------------------- | -------------------------- | ----------------------------- |
+| `:Ccheck` / `:Cc` / `:Chk`  | `:ImpetusLint`             | Run lint                      |
+| `:Chelp`                    | `:ImpetusCheatSheet`       | Quick help popup              |
+| `:Ch`                       | `:ImpetusHelpToggle`       | Toggle help pane              |
+| `:Cinfo` / `:Ci`            | `:ImpetusInfo`             | Toggle info pane              |
+| `:Cregistry` / `:Cr`        | `:ImpetusObjects`          | Object registry               |
+| `:Crefresh` / `:CR`         | `:ImpetusRefresh`          | Full refresh                  |
+| `:Update`                   | `:ImpetusUpdate`           | Force buffer analysis refresh |
+| `:Creload` / `:Crl`         | `:ImpetusReload`           | Reload database               |
+| `:Cgoto` / `:Cg`            | `:ImpetusParamDef`         | Goto definition               |
+| `:Cfind` / `:Cw`            | `:ImpetusParamRefs`        | Find references               |
+| `:Cref` / `:Cf`             | `:ImpetusRefComplete`      | Ref completion                |
+| `:Cgraph`                   | `:ImpetusGraphInfo`        | Graph summary                 |
+| `:Cgr`                      | `:ImpetusGraphRefs`        | Graph refs                    |
+| `:Cgdel`                    | `:ImpetusGraphDeleteCheck` | Delete safety check           |
+| `:Cblock`                   | `:ImpetusCheckBlocks`      | Control block check           |
+| `:Cfoldbounds`              | `:ImpetusFoldBounds`       | Fold analysis                 |
+| `:Ctrykwfold`               | `:ImpetusTryKeywordFold`   | Try keyword fold              |
+| `:Ctryctlfold`              | `:ImpetusTryControlFold`   | Try control fold              |
+| `:Cfolddbg`                 | `:ImpetusFoldDoctor`       | Fold doctor                   |
+| `:Cgui` / `:Co` / `:Copen`  | `:ImpetusOpenGUI`          | Open in GUI                   |
+| `:Re`                       | `:ImpetusReplaceParams`    | Replace params                |
+| `:Clean` / `:Clear` / `:Cl` | `:ImpetusClean`            | Clean                         |
+| `:Info` / `:Inf`            | `:ImpetusInfo`             | Info pane                     |
+| `:Help` / `:Hp`             | `:ImpetusCheatSheet`       | Cheat sheet                   |
+| `:Gui`                      | `:ImpetusOpenGUI`          | Open GUI                      |
+| `:Obj`                      | `:ImpetusObjects`          | Object registry               |
+| `:Refs`                     | `:ImpetusParamRefs`        | References                    |
+| `:Def`                      | `:ImpetusParamDef`         | Definition                    |
+| `:Rl`                       | `:ImpetusReload`           | Reload DB                     |
 
 ---
 
@@ -233,29 +233,29 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 
 ### 6.1 Severity Tiers
 
-| Tier | Sign | Meaning |
-|------|------|---------|
-| **Error** (`E`) | `E` | Structural errors, undefined references, duplicate IDs, missing required fields |
-| **Warning** (`W`) | `W` | Unknown keywords, empty blocks, unused parameters, field count mismatches |
-| **Suspicion** (`?`) | `?` | Physical values outside common-sense ranges (density, modulus, scale, velocity) |
+| Tier                | Sign | Meaning                                                                         |
+| ------------------- | ---- | ------------------------------------------------------------------------------- |
+| **Error** (`E`)     | `E`  | Structural errors, undefined references, duplicate IDs, missing required fields |
+| **Warning** (`W`)   | `W`  | Unknown keywords, empty blocks, unused parameters, field count mismatches       |
+| **Suspicion** (`?`) | `?`  | Physical values outside common-sense ranges (density, modulus, scale, velocity) |
 
 ### 6.2 Check Descriptions
 
-| # | Check | Severity | Description |
-|---|-------|----------|-------------|
-| 1 | **Control blocks** | Error | Unmatched `~if`/`~else_if`/`~else`/`~end_if`, `~repeat`/`~end_repeat`, `~convert_from_`/`~end_convert` |
-| 2 | **Unknown keywords** | Warning | `*KEYWORD` not found in `commands.help` database |
-| 3 | **Field counts** | Error | First data row has more comma-separated fields than the signature row expects |
-| 4 | **Parameter refs** | Error | `%param` referenced but never defined (cross-file aware) |
-| 5 | **Unused params** | Warning | `%param` defined but never referenced (cross-file aware) |
-| 6 | **Duplicate IDs** | Error | Same object ID (part, material, etc.) defined more than once in the same file |
-| 7 | **Missing includes** | Error | `*INCLUDE` file path does not exist on disk |
-| 8 | **Empty blocks** | Warning | Keyword block has no data rows (except `*END`, `*TITLE`) |
-| 9 | **Object refs** | Error / Warning | Reference to undefined object ID; downgraded to Warning if `*INCLUDE` is present |
-| 10 | **Required fields** | Error | Mandatory fields are empty or `-` (per-keyword logic, see below) |
-| 11 | **Enum values** | Error | Field value does not match accepted options from `commands.help` |
-| 12 | **Physics sanity** | Suspicion | Density, Young's modulus, length, velocity, mass outside typical ranges for detected unit system |
-| 13 | **Missing unit system** | Warning | File contains `*MAT_*` / `*PART` / `*LOAD` but no `*UNIT_SYSTEM` |
+| #   | Check                   | Severity        | Description                                                                                            |
+| --- | ----------------------- | --------------- | ------------------------------------------------------------------------------------------------------ |
+| 1   | **Control blocks**      | Error           | Unmatched `~if`/`~else_if`/`~else`/`~end_if`, `~repeat`/`~end_repeat`, `~convert_from_`/`~end_convert` |
+| 2   | **Unknown keywords**    | Warning         | `*KEYWORD` not found in `commands.help` database                                                       |
+| 3   | **Field counts**        | Error           | First data row has more comma-separated fields than the signature row expects                          |
+| 4   | **Parameter refs**      | Error           | `%param` referenced but never defined (cross-file aware)                                               |
+| 5   | **Unused params**       | Warning         | `%param` defined but never referenced (cross-file aware)                                               |
+| 6   | **Duplicate IDs**       | Error           | Same object ID (part, material, etc.) defined more than once in the same file                          |
+| 7   | **Missing includes**    | Error           | `*INCLUDE` file path does not exist on disk                                                            |
+| 8   | **Empty blocks**        | Warning         | Keyword block has no data rows (except `*END`, `*TITLE`)                                               |
+| 9   | **Object refs**         | Error / Warning | Reference to undefined object ID; downgraded to Warning if `*INCLUDE` is present                       |
+| 10  | **Required fields**     | Error           | Mandatory fields are empty or `-` (per-keyword logic, see below)                                       |
+| 11  | **Enum values**         | Error           | Field value does not match accepted options from `commands.help`                                       |
+| 12  | **Physics sanity**      | Suspicion       | Density, Young's modulus, length, velocity, mass outside typical ranges for detected unit system       |
+| 13  | **Missing unit system** | Warning         | File contains `*MAT_*` / `*PART` / `*LOAD` but no `*UNIT_SYSTEM`                                       |
 
 ### 6.3 Required-Field Logic
 
@@ -331,6 +331,7 @@ The `:clean` / `:clear` family removes noise and reformats the buffer.
 ### 8.2 `:clean -c` (warm clean)
 
 Removes from the buffer:
+
 - Blank lines inside and between keyword blocks
 - Comment lines (`#` / `$`) inside blocks
 - Comma-only placeholder lines (smart keep: preserved if the schema expects multi-field rows)
@@ -340,6 +341,7 @@ Removes from the buffer:
 ### 8.3 `:clean -a` (full clean)
 
 Runs `:clean -c` **plus**:
+
 - **Advanced prune**: Removes unknown keyword blocks entirely, strips leading/trailing blank lines inside known blocks
 - **Align parameters**: Formats `*PARAMETER` / `*PARAMETER_DEFAULT` blocks so `=` signs and trailing comments line up
 
@@ -354,6 +356,7 @@ After `:clean -a`, intrinsic syntax highlighting is reapplied.
 Replaces all `%param` references with their defined values (plain text substitution). Does **not** evaluate arithmetic.
 
 Example:
+
 ```
 Before: 1, 1, %thickness
 After : 1, 1, 2.5
@@ -364,6 +367,7 @@ After : 1, 1, 2.5
 Replaces parameters **and** evaluates all numeric expressions, including bracket expressions.
 
 Example:
+
 ```
 Before: 1, 1, [%L / 2]
 After : 1, 1, 50
@@ -380,12 +384,14 @@ Supported functions: `sin`, `cos`, `tan`, `asin`, `atan`, `tanh`, `sinr`, `cosr`
 Angles for `sin`/`cos`/`tan` are in **degrees**; `sinr`/`cosr`/`tanr` use **radians**.
 
 Example:
+
 ```
 Before: r22 = sin(%angle)        (*PARAMETER definition)
 After : r22 = 0.5                (definition itself is replaced)
 ```
 
 **Key difference from `:re -a`:**
+
 - `:re -a` skips `*PARAMETER` definition rows (only replaces references)
 - `:re -b` also replaces and evaluates inside `*PARAMETER` blocks
 
@@ -411,6 +417,7 @@ If the target is in another file, it opens in a left-side navigation split.
 ### 10.2 `gr` — Find References
 
 Lists all references to the item under cursor. Results are shown in a popup (if multiple) or jumped to directly (if exactly one). The popup shows:
+
 - Line number and kind (`def` / `ref`)
 - Source file (if cross-file)
 - Keyword tag (e.g., `*PART`)
@@ -424,6 +431,7 @@ Use `<Space>` or `<CR>` to jump to the selected item; `q` or `<Esc>` to close.
 ### 11.1 Omnifunc (`<C-x><C-o>`)
 
 Triggered manually or via `<C-Space>` in insert mode. Provides:
+
 - **Keyword completion**: Type `*` to see all keywords; selecting one can insert a full template block with title, parameter row, and blank data rows
 - **Parameter completion**: Type `%` to see defined parameters
 - **Object ID completion**: Context-aware suggestions (e.g., `typeid` suggests existing part IDs)
@@ -432,6 +440,7 @@ Triggered manually or via `<C-Space>` in insert mode. Provides:
 ### 11.2 Blink.cmp Integration
 
 If `blink.cmp` is installed, the plugin provides a source `impetus_kw` that:
+
 - Expands keyword completion into snippet templates
 - Uses snippet placeholders so `<Tab>` jumps field-to-field
 - Supports `j`/`k` navigation and `<Space>` acceptance (when `blink_menu_keys = true`)
@@ -439,6 +448,7 @@ If `blink.cmp` is installed, the plugin provides a source `impetus_kw` that:
 ### 11.3 Ref/Option Completion (`,,` / `,R`)
 
 In normal or insert mode, `,,` opens a floating popup with context-aware candidates:
+
 - If cursor is on an object-reference field (`pid`, `mid`, `gid`, etc.): lists all defined IDs of that type
 - If cursor is on a field with known options: lists accepted option values
 - If cursor is on `*UNIT_SYSTEM units`: lists all 14 valid unit system strings
@@ -451,14 +461,14 @@ Use `j`/`k` to navigate, `<Space>` / `<CR>` to accept, `q` / `<Esc>` to close.
 
 Folding is based on `*KEYWORD` blocks and control directives. All folds start open (`foldlevel=99`).
 
-| Action | Result |
-|--------|--------|
-| `,f` | Toggle all keyword folds closed / open |
-| `,t` | Toggle fold at current keyword |
-| `,F` | Toggle all control block folds |
-| `,T` | Toggle fold at current control block |
-| `,z` | Toggle everything |
-| `,m` | Jump between matching `~if`/`~end_if`, etc. |
+| Action | Result                                      |
+| ------ | ------------------------------------------- |
+| `,f`   | Toggle all keyword folds closed / open      |
+| `,t`   | Toggle fold at current keyword              |
+| `,F`   | Toggle all control block folds              |
+| `,T`   | Toggle fold at current control block        |
+| `,z`   | Toggle everything                           |
+| `,m`   | Jump between matching `~if`/`~end_if`, etc. |
 
 The `%` key also jumps between matching directives (falls back to native bracket matching if not on a directive).
 
@@ -469,6 +479,7 @@ The `%` key also jumps between matching directives (falls back to native bracket
 ### 13.1 Right Help Pane (`,h`)
 
 Opens a fixed-width right-side window showing:
+
 - The current keyword's signature rows
 - Parameter descriptions from `commands.help`
 - The parameter under the cursor is **highlighted** in the signature
@@ -484,6 +495,7 @@ A centered floating window with all shortcuts and commands. Press `q`, `<Esc>`, 
 ## 14. Info Pane
 
 Toggle with `,i` or `:Cinfo`. Shows a tree view of:
+
 - File statistics (keyword count, parameter count, object counts)
 - Keyword list with line numbers
 - Object registry summary
@@ -509,6 +521,7 @@ Analyzes whether the object under cursor can be safely deleted without breaking 
 ## 16. Intrinsic Functions (`gh`)
 
 `intrinsic.k` functions and variables are automatically syntax-highlighted (green for functions, yellow for variables). Press `gh` on any intrinsic token to see:
+
 - Function signature
 - Return type
 - Description
@@ -521,14 +534,14 @@ All mutating operations are appended to **`impetus_nvim.log`** in the **current 
 
 ### 17.1 Logged Operations
 
-| Command | Logged Details |
-|---------|---------------|
-| `:clean -c` | Removed line count, each line's row, reason, and text |
-| `:clean -a` | Warm + advanced removed counts, aligned parameter count, each line's row/reason/text |
-| `:re` | Changed line count, before/after for each modified line |
-| `:re -a` | Same as `:re`, flagged with `mode=re -a` |
-| `:re -b` | Same as `:re`, flagged with `mode=re -b` |
-| `,,` (ref completion) | Selected value, target file, row, parameter name |
+| Command               | Logged Details                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `:clean -c`           | Removed line count, each line's row, reason, and text                                |
+| `:clean -a`           | Warm + advanced removed counts, aligned parameter count, each line's row/reason/text |
+| `:re`                 | Changed line count, before/after for each modified line                              |
+| `:re -a`              | Same as `:re`, flagged with `mode=re -a`                                             |
+| `:re -b`              | Same as `:re`, flagged with `mode=re -b`                                             |
+| `,,` (ref completion) | Selected value, target file, row, parameter name                                     |
 
 ### 17.2 Log Format
 
@@ -556,14 +569,17 @@ The log is **append-only** and never truncated automatically.
 ## 18. Cross-File Parameter Resolution
 
 `build_cross_file_param_index()` recursively scans:
+
 1. All `*INCLUDE` files reachable from the current buffer
 2. All currently open buffers with `filetype=impetus`
 
 It merges:
+
 - **Definitions** (`*PARAMETER`, `*PARAMETER_DEFAULT`) from all sources
 - **References** (`%param` usages) from all sources
 
 This means:
+
 - A parameter defined in an included file is **not** flagged as "undefined" in the parent
 - A parameter used only in an included file is **not** flagged as "unused" in the parent
 - Object references across includes are downgraded from **Error** to **Warning** (since the object may exist in the included file)
@@ -574,20 +590,20 @@ This means:
 
 Set these in your `setup({...})` call:
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `help_file` | `nil` | Path to `commands.help` |
-| `auto_load` | `true` | Auto-load database on startup |
-| `cache_file` | `nil` | Custom cache path |
-| `lint_on_save` | `true` | Run `:Ccheck` on `:w` |
-| `filetypes` | `{"impetus"}` | Filetypes to attach |
-| `blink_retrigger_on_star` | `true` | Retrigger blink on `*` in insert mode |
-| `blink_menu_keys` | `false` | Enable `j`/`k`/`<Space>` in blink menu |
-| `tab_field_jump` | `true` | `<Tab>` jumps fields instead of inserting tab |
-| `side_help_track` | `true` | Enable right help pane tracking |
-| `side_help_width` | `68` | Help pane width |
-| `dev_hot_reload` | `true` | Auto-reload plugin/help on `FocusGained` |
-| `dev_mode` | `false` | Enable `:Cdbg` and `:Cdoctor` commands |
+| Option                    | Default       | Description                                   |
+| ------------------------- | ------------- | --------------------------------------------- |
+| `help_file`               | `nil`         | Path to `commands.help`                       |
+| `auto_load`               | `true`        | Auto-load database on startup                 |
+| `cache_file`              | `nil`         | Custom cache path                             |
+| `lint_on_save`            | `true`        | Run `:Ccheck` on `:w`                         |
+| `filetypes`               | `{"impetus"}` | Filetypes to attach                           |
+| `blink_retrigger_on_star` | `true`        | Retrigger blink on `*` in insert mode         |
+| `blink_menu_keys`         | `false`       | Enable `j`/`k`/`<Space>` in blink menu        |
+| `tab_field_jump`          | `true`        | `<Tab>` jumps fields instead of inserting tab |
+| `side_help_track`         | `true`        | Enable right help pane tracking               |
+| `side_help_width`         | `68`          | Help pane width                               |
+| `dev_hot_reload`          | `true`        | Auto-reload plugin/help on `FocusGained`      |
+| `dev_mode`                | `false`       | Enable `:Cdbg` and `:Cdoctor` commands        |
 
 ---
 
@@ -597,26 +613,26 @@ When a `*UNIT_SYSTEM` is detected, `:Ccheck` validates physical quantities again
 
 ### 20.1 Supported Unit Systems (14 valid forms)
 
-| Canonical | Aliases |
-|-----------|---------|
-| `SI` | `SI` |
-| `MMTONS` | `MMTONS`, `MM/TON/S` |
-| `CMGUS` | `CMGUS`, `CM/G/US` |
-| `IPS` | `IPS` |
-| `MMKGMS` | `MMKGMS`, `MM/KG/MS` |
-| `CMGS` | `CMGS`, `CM/G/S` |
-| `MMGMS` | `MMGMS`, `MM/G/MS` |
-| `MMMGMS` | `MMMGMS`, `MM/MG/MS` |
+| Canonical | Aliases              |
+| --------- | -------------------- |
+| `SI`      | `SI`                 |
+| `MMTONS`  | `MMTONS`, `MM/TON/S` |
+| `CMGUS`   | `CMGUS`, `CM/G/US`   |
+| `IPS`     | `IPS`                |
+| `MMKGMS`  | `MMKGMS`, `MM/KG/MS` |
+| `CMGS`    | `CMGS`, `CM/G/S`     |
+| `MMGMS`   | `MMGMS`, `MM/G/MS`   |
+| `MMMGMS`  | `MMMGMS`, `MM/MG/MS` |
 
 ### 20.2 Checked Quantities
 
-| Quantity | Fields Checked | Typical Steel Reference |
-|----------|---------------|------------------------|
-| Density (`rho`) | `rho`, `density` | ~7850 kg/m³ (SI) |
-| Young's modulus (`e`) | `e`, `young`, `youngs` | ~210 GPa (SI) |
-| Length / coordinates | `x`, `y`, `z`, `x_*`, `y_*`, `z_*` | — |
-| Velocity | `v`, `vx`, `vy`, `vz`, `velocity*` | — |
-| Mass | `m`, `mass` | — |
+| Quantity              | Fields Checked                     | Typical Steel Reference |
+| --------------------- | ---------------------------------- | ----------------------- |
+| Density (`rho`)       | `rho`, `density`                   | ~7850 kg/m³ (SI)        |
+| Young's modulus (`e`) | `e`, `young`, `youngs`             | ~210 GPa (SI)           |
+| Length / coordinates  | `x`, `y`, `z`, `x_*`, `y_*`, `z_*` | —                       |
+| Velocity              | `v`, `vx`, `vy`, `vz`, `velocity*` | —                       |
+| Mass                  | `m`, `mass`                        | —                       |
 
 ---
 
@@ -625,6 +641,7 @@ When a `*UNIT_SYSTEM` is detected, `:Ccheck` validates physical quantities again
 ### 21.1 Zero-ID Semantics (`0`)
 
 The value `0` means "undefined / unset" for damage, thermal, and EOS references. The plugin treats `0` as a **non-reference**:
+
 - `:Ccheck` does **not** report "undefined object" for `did=0`, `thpid=0`, `eosid=0`
 - `gd` / `gr` on `0` does nothing
 - Object tracking ignores `id == "0"`
@@ -632,6 +649,7 @@ The value `0` means "undefined / unset" for damage, thermal, and EOS references.
 ### 21.2 `pid_offset` / `mid_offset` Disconnected
 
 Parameters named `pid_offset`, `mid_offset`, etc. are **not** treated as object references. Only exact matches (`pid`, `mid`, `fid`, `gid`, `did`, `thpid`, `eosid`, `tabid`) and their `_N` suffixes (`pid_1`, `mid_2`, `tabid_m`, etc.) are classified as references.
+
 - `tabid` references resolve to `*TABLE` definitions (first field `coid`).
 - `sph` and `dp` (discrete particle) IDs are tracked for `*PARTICLE_SPH` / `*PARTICLE_HE` / `*PARTICLE_AIR` / `*PARTICLE_SOIL`.
 

@@ -4,39 +4,56 @@ Neovim plugin scaffold for Impetus keyword authoring, based on `commands.help`.
 
 ## Features (v0)
 
-- Filetype detection for `*.key`, `*.k`, `*.imp`, `*.inp`, `commands.help`
+- Filetype detection for `*.key`, `*.k`.
 
 - Custom dark, high-contrast Impetus highlight palette (image-style magenta/cyan/green/red accents)
+
 - Syntax highlighting for keywords, directives, parameters, repeat vars
+
 - Parse `commands.help` into an in-memory keyword database
+
 - Bundled starter database at `data/keywords.json` (generated from your current `commands.help`)
-- Bundled snippet export example at `data/impetus.code-snippets`
+
+
 - `omnifunc` completion:
+  
   - keyword completion (`*...`)
   - parameter completion (`%...`)
   - per-keyword parameter hints
   - context-aware object ID completion (e.g. `typeid` can suggest existing part IDs in current file)
+
 - `blink.cmp` source `impetus.blink_source`:
+  
   - keyword completion can expand into a full template block
   - inserts `"Optional title"`, `#` parameter row(s), and blank input row(s)
   - template insertion uses snippet placeholders so `Tab` jumps field-to-field
   - for Impetus buffers: `j/k` select menu item, `<Space>` accept when menu is visible
+
 - Persistent field workflow:
+  
   - `tab_field_jump = true` keeps `<Tab>` field-jump available even after snippet session ends
   - empty parameter fields are highlighted for easier revisit/editing
+
 - Hover docs on `K`:
+  
   - keyword signature
   - parameter description (from `commands.help`)
+
 - Basic lint:
+  
   - unknown keyword warning
   - first data row field-count hint
   - `~if/~else_if/~else/~end_if` balance checks
   - `~repeat/~end_repeat` balance checks
   - `~convert_from_/~end_convert` balance checks
   - warn on parameter references without in-file definitions
+
 - Keyword folding by `*KEYWORD` blocks
+
 - Outline and navigation helpers for keywords/parameters
+
 - Export parsed database to JSON
+
 - Export snippet templates to VSCode snippet JSON
 
 ## Install
@@ -47,16 +64,17 @@ Use as local plugin with your preferred manager.
 
 ```lua
 {
-  dir = "E:/AI/codex/case1/impetus.nvim",
+  "Ericlee2008/Impetus-plugin-Nvim",
+  lazy = false,
   config = function()
     require("impetus").setup({
-      help_file = "E:/AI/codex/case1/commands.help",
-      auto_load = true,
       lint_on_save = true,
     })
   end,
 }
 ```
+
+> **Note:** Using `lazy = false` is recommended because this plugin provides filetype detection (`ftdetect/`), syntax highlighting, and buffer-local keymaps that must be available before the buffer is opened. Delayed loading (`ft` or `event`) can cause filetype detection to fail on files opened from the command line (`nvim file.key`).
 
 ## Commands
 

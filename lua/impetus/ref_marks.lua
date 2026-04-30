@@ -265,7 +265,7 @@ function M.setup()
 
   vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
     group = group,
-    pattern = { "*.k", "*.key", "*.imp", "*.inp" },
+    pattern = { "*.k", "*.key" }
     callback = function(ev)
       if enabled then
         M.update(ev.buf)
@@ -275,7 +275,7 @@ function M.setup()
 
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
     group = group,
-    pattern = { "*.k", "*.key", "*.imp", "*.inp" },
+    pattern = { "*.k", "*.key" }
     callback = function(ev)
       if enabled then
         M.update_debounced(ev.buf, 400)

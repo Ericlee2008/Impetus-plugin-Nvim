@@ -1,5 +1,5 @@
 augroup impetus_filetype
   autocmd!
-  autocmd BufNewFile,BufRead *.key,*.k,*.imp,*.inp setlocal filetype=impetus
+  autocmd BufNewFile,BufRead *.key,*.k setlocal filetype=impetus
   autocmd BufNewFile,BufRead commands.help setlocal filetype=impetus
 augroup END

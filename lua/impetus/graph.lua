@@ -153,7 +153,7 @@ end
 
 local function is_model_file(path)
   local p = (path or ""):lower()
-  return p:match("%.k$") or p:match("%.key$") or p:match("%.imp$") or p:match("%.inp$")
+  return p:match("%.k$") or p:match("%.key$")
 end
 
 local function split_keyword_blocks(lines)
