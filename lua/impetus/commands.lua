@@ -1214,6 +1214,39 @@ local function normalize_expression_lines(block_lines)
   return out
 end
 
+local function normalize_repeat_indentation(lines)
+  local out = {}
+  local depth = 0
+
+  for _, line in ipairs(lines or {}) do
+    local raw = line or ""
+    local trimmed = trim(strip_number_prefix(raw))
+    local is_repeat_start = trimmed:match("^~repeat%f[%A]") ~= nil
+    local is_repeat_end = trimmed:match("^~end_repeat%f[%A]") ~= nil
+
+    if trimmed == "" then
+      out[#out + 1] = raw
+    else
+      if is_repeat_end then
+        depth = math.max(depth - 1, 0)
+      end
+
+      if depth > 0 or is_repeat_start or is_repeat_end then
+        local content = raw:gsub("^%s*", "")
+        out[#out + 1] = string.rep(" ", depth * 2) .. content
+      else
+        out[#out + 1] = raw
+      end
+
+      if is_repeat_start then
+        depth = depth + 1
+      end
+    end
+  end
+
+  return out
+end
+
 local function simple_beautify_buffer()
   local buf = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -1250,6 +1283,8 @@ local function simple_beautify_buffer()
       formatted = normalize_comma_lines(block_lines)
       formatted = normalize_expression_lines(formatted)
     end
+
+    formatted = normalize_repeat_indentation(formatted)
 
     if formatted then
       for idx, new_line in ipairs(formatted) do
@@ -3641,6 +3676,10 @@ function M.register()
     actions.open_in_gui()
   end, {})
 
+  vim.api.nvim_create_user_command("ImpetusPreviewGeometry", function()
+    actions.preview_geometry()
+  end, {})
+
   vim.api.nvim_create_user_command("ImpetusHighlightProbe", function()
     arm_highlight_probe()
   end, {})
@@ -3716,6 +3755,7 @@ function M.register()
   add_alias("Chlprobe", "ImpetusHighlightProbe")
   add_alias("Cref", "ImpetusRefComplete")
   add_alias("Cf", "ImpetusRefComplete")
+  add_alias("Cgeo", "ImpetusPreviewGeometry")
   add_alias("Cregistry", "ImpetusObjects")
   add_alias("Cr", "ImpetusObjects")
   add_alias("Obj", "ImpetusObjects")
