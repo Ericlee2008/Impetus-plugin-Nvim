@@ -85,6 +85,7 @@ Use as local plugin with your preferred manager.
 - `:ImpetusParamDef [name]`
 - `:ImpetusParamRefs [name]`
 - `:ImpetusObjects`
+- `:ImpetusPreviewGeometry`
 - `:ImpetusExportJson /path/to/keywords.json`
 - `:ImpetusExportSnippets /path/to/impetus.code-snippets`
 
@@ -93,7 +94,8 @@ Use as local plugin with your preferred manager.
 1. Open any `*.key` file.
 2. Trigger completion via `<C-x><C-o>` (omnifunc) or your completion framework.
 3. Put cursor on keyword/parameter and press `K`.
-4. Run `:ImpetusLint` to inspect current buffer.
+4. Run `:ImpetusPreviewGeometry` to open a simple model viewer for the current block.
+5. Run `:ImpetusLint` to inspect current buffer.
 
 ## Notes
 

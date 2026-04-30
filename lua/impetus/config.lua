@@ -14,6 +14,12 @@ local defaults = {
   ref_marks = true,
   dev_hot_reload = true,
   dev_mode = false,
+  geometry_preview = {
+    enabled = true,
+    python_exe = "pyw",
+    python_args = { "-3" },
+    viewer_script = nil,
+  },
 }
 
 local state = {

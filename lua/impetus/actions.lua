@@ -2,6 +2,8 @@ local side_help = require("impetus.side_help")
 local info = require("impetus.info")
 local template = require("impetus.template")
 local analysis = require("impetus.analysis")
+local config = require("impetus.config")
+local geometry_preview = require("impetus.geometry_preview")
 local store = require("impetus.store")
 local schema = require("impetus.schema")
 local log = require("impetus.log")
@@ -2899,6 +2901,18 @@ function M.open_in_gui()
     end
   else
     vim.fn.jobstart({ exe, file }, { detach = true })
+  end
+end
+
+function M.preview_geometry()
+  local opts = config.get().geometry_preview or {}
+  if not opts.enabled then
+    vim.notify("impetus: geometry preview is disabled", vim.log.levels.WARN)
+    return
+  end
+  local ok, err = geometry_preview.open_current()
+  if not ok and err then
+    vim.notify("impetus: " .. err, vim.log.levels.WARN)
   end
 end
 
