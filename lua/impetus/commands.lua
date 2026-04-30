@@ -1214,6 +1214,32 @@ local function normalize_expression_lines(block_lines)
   return out
 end
 
+-- Format ~repeat / ~end_repeat indentation.
+-- ~repeat and ~end_repeat are indented by (depth * 2) spaces.
+-- Content lines inside repeat blocks are indented by (depth * 2) spaces.
+-- Lines outside repeat blocks are left untouched.
+local function format_repeat_indent(lines)
+  local out = {}
+  local depth = 0
+  for _, line in ipairs(lines) do
+    local t = trim(line)
+    if t:match("^~repeat") then
+      out[#out + 1] = string.rep(" ", depth * 2) .. t
+      depth = depth + 1
+    elseif t:match("^~end_repeat") then
+      depth = math.max(0, depth - 1)
+      out[#out + 1] = string.rep(" ", depth * 2) .. t
+    else
+      if depth > 0 then
+        out[#out + 1] = string.rep(" ", depth * 2) .. t
+      else
+        out[#out + 1] = line
+      end
+    end
+  end
+  return out
+end
+
 local function simple_beautify_buffer()
   local buf = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -1263,6 +1289,18 @@ local function simple_beautify_buffer()
       end
     end
   end
+
+  -- Format ~repeat / ~end_repeat indentation
+  local new_lines = format_repeat_indent(lines)
+  for i, new_line in ipairs(new_lines) do
+    if lines[i] ~= new_line then
+      if lines[i] ~= nil or new_line ~= "" then
+        changed = changed + 1
+        entries[#entries + 1] = { row = i - 1, keyword = "", old_line = lines[i], new_line = new_line }
+      end
+    end
+  end
+  lines = new_lines
 
   if changed > 0 then
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
