@@ -118,7 +118,9 @@ end
 local function get_data_lines(block_lines)
   local out = {}
   for _, line in ipairs(block_lines) do
-    if not is_meta_line(line) then
+    local t = trim(strip_number_prefix(line or ""))
+    -- Skip keyword lines (start with *) in addition to meta lines
+    if not is_meta_line(line) and t:sub(1, 1) ~= "*" then
       out[#out + 1] = line
     end
   end
