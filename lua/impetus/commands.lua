@@ -2846,12 +2846,12 @@ local function replace_params_in_buffer(mode)
                 local num = eval_fn(replaced)
                 collect_eval_error(i, replaced)
                 if num then return num end
-              end
-              -- Partial simplification: always try, even inside ~repeat blocks
-              -- (loop variables like r1, r2 are preserved as unknown identifiers)
-              local simplified = partial_eval_expr(replaced)
-              if simplified then
-                return simplified
+                -- Partial simplification: try to simplify even if full eval failed
+                -- (loop variables like r1, r2 are preserved as unknown identifiers)
+                local simplified = partial_eval_expr(replaced)
+                if simplified then
+                  return simplified
+                end
               end
               return replaced
             end)

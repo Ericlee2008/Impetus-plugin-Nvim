@@ -1,0 +1,1 @@
+{"objects": [{"shape": "pipe", "keyword": "*COMPONENT_PIPE", "points": [[0.0, 0.0, 0.0001], [0.0, 0.0, 0.02]], "scalars": [0.1, 0.05]}, {"shape": "box", "keyword": "*COMPONENT_BOX", "points": [[0, 0, 0], [1, 1, 1]], "splits": [2, 2, 2]}]}

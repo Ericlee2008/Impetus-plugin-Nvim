@@ -637,6 +637,7 @@ local function check_duplicate_ids(ctx, diagnostics)
     if k:match("^%*CONTACT_") then return "contact" end
     if k:match("^%*CONNECTOR_") then return "connector" end
     if k:match("^%*COMPONENT_") then return "component" end
+    if k:match("^%*TRANSFORM_MESH_") then return "command" end
     if k == "*OUTPUT_USER" then return "command" end
     if k:match("^%*PARTICLE_") then return k:sub(2) end
     if k == "*PROP_DAMAGE_CL" or k == "*PROP_DAMAGE_JC" then return "prop_damage" end
