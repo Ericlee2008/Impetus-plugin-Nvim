@@ -2978,7 +2978,7 @@ L              : Fixed element size in shock viscosity pressure calculation
 *MAT_METAL
 "Optional title"
 mid,  ρ,  E,  ν,  did,  thpid,  eosid
-cid,  ξ,  tresca,  c,  ̇ε_0,  m,  T_0,  T_m
+cid,  ξ,  yield,  c,  ̇ε_0,  m,  T_0,  T_m
 s_0,  s_1,  ε_d,  μ
 ----------------------------------------------------------------
 Variable         Description

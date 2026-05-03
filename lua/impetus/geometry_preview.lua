@@ -30,7 +30,14 @@ local function shape_from_keyword(keyword)
   return nil
 end
 
+local function is_mesh_keyword(keyword)
+  local k = (keyword or ""):upper()
+  return k:find("^%*ELEMENT_SOLID") ~= nil or k == "*NODE"
+end
+
 local function is_geometry_keyword(keyword)
+  -- Exclude mesh keywords so *NODE/*ELEMENT_SOLID aren't treated as geometry
+  if is_mesh_keyword(keyword) then return false end
   return shape_from_keyword(keyword) ~= nil
 end
 
@@ -521,12 +528,101 @@ local function build_payload(bufnr)
   return payload
 end
 
+-- =====================================================================
+-- Mesh payload builder (ELEMENT_SOLID + NODE)
+-- =====================================================================
+local function build_mesh_payload(bufnr, lines)
+  local nodes = {}   -- [nid] = {x, y, z}
+  local elements = {} -- { eid, pid, etype, nodes }
+
+  local i = 1
+  while i <= #lines do
+    local kw = parse_keyword(lines[i] or "")
+    if kw then
+      local kw_upper = kw:upper()
+      local end_row = #lines
+      for r = i + 1, #lines do
+        if parse_keyword(lines[r] or "") then
+          end_row = r - 1
+          break
+        end
+      end
+
+      if kw_upper == "*NODE" then
+        -- Parse node block
+        for r = i + 1, end_row do
+          local line = lines[r] or ""
+          if not is_meta_line(line) then
+            local vals = extract_values(line, nil)  -- no param resolution for nodes
+            if vals and #vals >= 4 then
+              local nid = math.floor(vals[1])
+              nodes[tostring(nid)] = { vals[2], vals[3], vals[4] }
+            end
+          end
+        end
+      elseif kw_upper:find("^%*ELEMENT_SOLID") then
+        -- Parse element block
+        for r = i + 1, end_row do
+          local line = lines[r] or ""
+          if not is_meta_line(line) then
+            local vals = extract_values(line, nil)
+            if vals and #vals >= 3 then
+              local eid = math.floor(vals[1])
+              local pid = math.floor(vals[2])
+              local node_ids = {}
+              for j = 3, #vals do
+                node_ids[#node_ids + 1] = math.floor(vals[j])
+              end
+              local etype
+              if #node_ids == 8 then
+                etype = "hex"
+              elseif #node_ids == 6 then
+                etype = "penta"
+              elseif #node_ids == 4 then
+                etype = "tetra"
+              else
+                etype = "hex"  -- default
+              end
+              elements[#elements + 1] = {
+                eid = eid,
+                pid = pid,
+                etype = etype,
+                nodes = node_ids,
+              }
+            end
+          end
+        end
+      end
+      i = end_row + 1
+    else
+      i = i + 1
+    end
+  end
+
+  if #elements == 0 then
+    return nil
+  end
+
+  return {
+    type = "mesh",
+    nodes = nodes,
+    elements = elements,
+    file = vim.api.nvim_buf_get_name(bufnr),
+  }
+end
+
 local function build_all_payloads(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+  -- Collect mesh data FIRST (independent of geometry blocks)
+  local mesh_payload = build_mesh_payload(bufnr, lines)
+
   local blocks = find_all_geometry_blocks(lines)
-  if #blocks == 0 then
-    return nil, "no geometry keyword blocks found in current file"
+
+  -- Fail only if NEITHER geometry nor mesh data exists
+  if #blocks == 0 and not mesh_payload then
+    return nil, "no geometry or mesh keyword blocks found in current file"
   end
 
   local param_idx = analysis.build_cross_file_param_index(bufnr)
@@ -543,8 +639,15 @@ local function build_all_payloads(bufnr)
     end
   end
 
+  -- Append mesh data to payloads
+  if mesh_payload then
+    payloads[#payloads + 1] = mesh_payload
+    vim.notify(string.format("[geometry_preview] mesh: %d nodes, %d elements",
+      vim.tbl_count(mesh_payload.nodes or {}), #mesh_payload.elements), vim.log.levels.INFO)
+  end
+
   if #payloads == 0 then
-    return nil, "no valid geometry payloads built:\n" .. table.concat(errors, "\n")
+    return nil, "no valid geometry or mesh payloads built:\n" .. table.concat(errors, "\n")
   end
 
   return payloads, (#errors > 0 and table.concat(errors, "\n") or nil)
@@ -586,10 +689,12 @@ end
 
 function M.close_viewer()
   if M._viewer_job and M._viewer_job > 0 then
-    local ok = pcall(vim.fn.chansend, M._viewer_job, vim.json.encode({ cmd = "exit" }) .. "\n")
-    if not ok then
-      M._viewer_job = nil
-    end
+    pcall(vim.fn.chansend, M._viewer_job, vim.json.encode({ cmd = "exit" }) .. "\n")
+    -- Always stop the job and clear the reference; the process may hang
+    -- even if chansend appeared to succeed.
+    vim.wait(300, function() return false end, 10)
+    pcall(vim.fn.jobstop, M._viewer_job)
+    M._viewer_job = nil
   end
 end
 
@@ -632,13 +737,15 @@ function M.open_current()
   if not M._viewer_job or M._viewer_job <= 0 then
     need_start = true
   else
-    local alive = pcall(vim.fn.jobpid, M._viewer_job)
-    if not alive then
+    local ok, pid = pcall(vim.fn.jobpid, M._viewer_job)
+    if not ok or pid <= 0 then
       need_start = true
     end
   end
 
   if need_start then
+    -- Always clear previous job reference first
+    M._viewer_job = nil
     -- Kill any stale viewer processes before launching a new one
     vim.fn.system('taskkill /F /IM pythonw.exe 2>nul')
     vim.fn.system('taskkill /F /IM python.exe /FI "WINDOWTITLE eq Impetus Geometry Preview*" 2>nul')
@@ -651,24 +758,14 @@ function M.open_current()
     end
     cmd[#cmd + 1] = script
 
-    local stderr_lines = {}
     M._viewer_job = vim.fn.jobstart(cmd, {
       detach = true,
-      on_stderr = function(_, data)
-        if data then
-          for _, line in ipairs(data) do
-            if line and line ~= "" then
-              stderr_lines[#stderr_lines + 1] = line
-            end
-          end
-        end
-      end,
+      stderr_buffered = false,
       on_exit = function(_, code)
         M._viewer_job = nil
         if code ~= 0 then
-          local msg = table.concat(stderr_lines, "\n")
           vim.schedule(function()
-            vim.notify("[geometry_preview] viewer exited with code " .. code .. ":\n" .. msg, vim.log.levels.ERROR)
+            vim.notify("[geometry_preview] viewer exited with code " .. code .. " — check scripts/viewer_debug.log", vim.log.levels.ERROR)
           end)
         end
       end,
@@ -684,6 +781,7 @@ function M.open_current()
   local cmd_json = vim.json.encode({ cmd = "load", payload = all_payload }) .. "\n"
   local ok = pcall(vim.fn.chansend, M._viewer_job, cmd_json)
   if not ok then
+    pcall(vim.fn.jobstop, M._viewer_job)
     M._viewer_job = nil
     return false, "viewer process is dead; retry with ,v"
   end
