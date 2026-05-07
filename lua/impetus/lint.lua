@@ -54,6 +54,27 @@ local function split_csv_keep_empty(line)
   return out
 end
 
+-- Same as split_csv_keep_empty but also supports whitespace-separated fields
+-- (no commas present). Used for *CURVE/*FUNCTION data-point rows.
+local function split_fields_keep_empty(line)
+  local out = {}
+  local s = line or ""
+  if s:find(",") then
+    s = s .. ","
+    for part in s:gmatch("(.-),") do
+      out[#out + 1] = trim(part)
+    end
+  else
+    for part in s:gmatch("%S+") do
+      out[#out + 1] = part
+    end
+  end
+  while #out > 0 and out[#out] == "" do
+    out[#out] = nil
+  end
+  return out
+end
+
 local function split_csv_outside_quotes(line)
   local out = {}
   local in_quotes = false
@@ -882,10 +903,82 @@ local function check_required_fields(ctx, diagnostics)
             if #data_rows < 2 then
               push_diagnostic(diagnostics, start_i - 1, 0, SEV.ERROR, "Missing expression row in " .. kw)
             else
-              local expr = trim(lines[data_rows[2]] or "")
-              if expr == "" then
-                push_diagnostic(diagnostics, data_rows[2] - 1, 0, SEV.ERROR, "Missing expression in " .. kw)
+              local expr_line = trim(lines[data_rows[2]] or "")
+              local expr_fields = split_fields_keep_empty(expr_line)
+              local looks_like_data = #expr_fields >= 2
+                and tonumber(trim(expr_fields[1] or "")) ~= nil
+                and tonumber(trim(expr_fields[2] or "")) ~= nil
+
+              if looks_like_data then
+                -- Data-point format: check monotonic x
+                local prev_x = nil
+                for idx = 2, #data_rows do
+                  local row = data_rows[idx]
+                  local f = split_fields_keep_empty(lines[row])
+                  local x_str = trim(f[1] or "")
+                  local x = tonumber(x_str)
+                  if x == nil then
+                    push_diagnostic(diagnostics, row - 1, 0, SEV.ERROR,
+                      "Invalid x-coordinate in " .. kw .. " data row (expected numeric, got '" .. x_str .. "')")
+                    break
+                  end
+                  if prev_x ~= nil then
+                    if x < prev_x then
+                      push_diagnostic(diagnostics, row - 1, 0, SEV.ERROR,
+                        "X-coordinate must be strictly increasing in " .. kw .. " (current: " .. x .. ", previous: " .. prev_x .. ")")
+                    elseif x == prev_x then
+                      push_diagnostic(diagnostics, row - 1, 0, SEV.ERROR,
+                        "Duplicate x-coordinate in " .. kw .. " (x = " .. x .. ")")
+                    end
+                  end
+                  prev_x = x
+                end
+              else
+                -- Expression format
+                if expr_line == "" then
+                  push_diagnostic(diagnostics, data_rows[2] - 1, 0, SEV.ERROR, "Missing expression in " .. kw)
+                end
               end
+            end
+          end
+
+        elseif kw_upper == "*CURVE" then
+          -- *CURVE format: optional title row, then id row, then (x, y) data points.
+          -- Auto-detect the first row that looks like a data point (>=2 numeric fields).
+          local start_idx = nil
+          for idx = 1, #data_rows do
+            local row = data_rows[idx]
+            local f = split_fields_keep_empty(lines[row])
+            if #f >= 2
+              and tonumber(trim(f[1] or "")) ~= nil
+              and tonumber(trim(f[2] or "")) ~= nil then
+              start_idx = idx
+              break
+            end
+          end
+
+          if start_idx then
+            local prev_x = nil
+            for idx = start_idx, #data_rows do
+              local row = data_rows[idx]
+              local f = split_fields_keep_empty(lines[row])
+              local x_str = trim(f[1] or "")
+              local x = tonumber(x_str)
+              if x == nil then
+                push_diagnostic(diagnostics, row - 1, 0, SEV.ERROR,
+                  "Invalid x-coordinate in " .. kw .. " data row (expected numeric, got '" .. x_str .. "')")
+                break
+              end
+              if prev_x ~= nil then
+                if x < prev_x then
+                  push_diagnostic(diagnostics, row - 1, 0, SEV.ERROR,
+                    "X-coordinate must be strictly increasing in " .. kw .. " (current: " .. x .. ", previous: " .. prev_x .. ")")
+                elseif x == prev_x then
+                  push_diagnostic(diagnostics, row - 1, 0, SEV.ERROR,
+                    "Duplicate x-coordinate in " .. kw .. " (x = " .. x .. ")")
+                end
+              end
+              prev_x = x
             end
           end
 

@@ -2311,17 +2311,45 @@ collect_control_ranges = function(lines)
   return ranges
 end
 
+collect_comment_ranges = function(lines)
+  local ranges = {}
+  local i = 1
+  while i <= #lines do
+    local t = vim.fn.trim(lines[i] or "")
+    if t ~= "" and (t:sub(1, 1) == "#" or t:sub(1, 1) == "$") then
+      local s = i
+      while i <= #lines do
+        local t2 = vim.fn.trim(lines[i] or "")
+        if t2 == "" or t2:sub(1, 1) == "#" or t2:sub(1, 1) == "$" then
+          i = i + 1
+        else
+          break
+        end
+      end
+      local e = i - 1
+      if e > s then
+        ranges[#ranges + 1] = { s = s, e = e }
+      end
+    else
+      i = i + 1
+    end
+  end
+  return ranges
+end
+
 ensure_fold_ui_state = function()
   local st = vim.b.impetus_fold_ui_state
   if type(st) ~= "table" then
     st = {
       kw_closed = {},
       ctrl_closed = {},
+      comment_closed = {},
     }
     vim.b.impetus_fold_ui_state = st
   end
   st.kw_closed = st.kw_closed or {}
   st.ctrl_closed = st.ctrl_closed or {}
+  st.comment_closed = st.comment_closed or {}
   return st
 end
 
@@ -2342,6 +2370,11 @@ local function rebuild_all_manual_folds(lines)
   end
   for _, r in ipairs(collect_keyword_ranges(lines)) do
     if st.kw_closed[range_toggle_key(r.s, r.e)] == true then
+      ranges[#ranges + 1] = r
+    end
+  end
+  for _, r in ipairs(collect_comment_ranges(lines)) do
+    if st.comment_closed[range_toggle_key(r.s, r.e)] == true then
       ranges[#ranges + 1] = r
     end
   end
@@ -2438,7 +2471,8 @@ function M.toggle_all_folds()
   local st = ensure_fold_ui_state()
   local kw_ranges = collect_keyword_ranges(lines)
   local ctrl_ranges = collect_control_ranges(lines)
-  if #kw_ranges == 0 and #ctrl_ranges == 0 then
+  local comment_ranges = collect_comment_ranges(lines)
+  if #kw_ranges == 0 and #ctrl_ranges == 0 and #comment_ranges == 0 then
     return
   end
 
@@ -2452,6 +2486,14 @@ function M.toggle_all_folds()
   if all_closed then
     for _, r in ipairs(ctrl_ranges) do
       if st.ctrl_closed[range_toggle_key(r.s, r.e)] ~= true then
+        all_closed = false
+        break
+      end
+    end
+  end
+  if all_closed then
+    for _, r in ipairs(comment_ranges) do
+      if st.comment_closed[range_toggle_key(r.s, r.e)] ~= true then
         all_closed = false
         break
       end
@@ -2477,6 +2519,14 @@ function M.toggle_all_folds()
       st.ctrl_closed[key] = nil
     end
   end
+  for _, r in ipairs(comment_ranges) do
+    local key = range_toggle_key(r.s, r.e)
+    if close_now then
+      st.comment_closed[key] = true
+    else
+      st.comment_closed[key] = nil
+    end
+  end
 
   save_fold_ui_state(st)
   rebuild_all_manual_folds(lines)
@@ -2493,6 +2543,9 @@ function M.close_all_folds()
   end
   for _, r in ipairs(collect_control_ranges(lines)) do
     st.ctrl_closed[range_toggle_key(r.s, r.e)] = true
+  end
+  for _, r in ipairs(collect_comment_ranges(lines)) do
+    st.comment_closed[range_toggle_key(r.s, r.e)] = true
   end
   save_fold_ui_state(st)
   rebuild_all_manual_folds(lines)
@@ -2901,6 +2954,69 @@ function M.open_in_gui()
     end
   else
     vim.fn.jobstart({ exe, file }, { detach = true })
+  end
+end
+
+function M.open_manual_under_cursor()
+  local base_url = "https://www.impetus.no/support/manual/"
+  local buf = vim.api.nvim_get_current_buf()
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  local block = find_block(buf, row)
+  local keyword = block and block.keyword or nil
+  local url = base_url
+  if keyword and keyword ~= "" then
+    url = base_url .. "?command=" .. keyword:gsub("^%*", ""):upper()
+  end
+  local focus_only = vim.g.impetus_manual_last_url == url
+  vim.g.impetus_manual_last_url = url
+
+  local launcher_dir = vim.fn.stdpath("cache")
+  if launcher_dir == "" then
+    launcher_dir = vim.fn.getcwd()
+  end
+  local launcher = launcher_dir .. "/impetus-manual-launcher.html"
+  local js_url = url:gsub("\\", "\\\\"):gsub("'", "\\'")
+  local script
+  if focus_only then
+    script = {
+      "var targetUrl = '" .. js_url .. "';",
+      "try {",
+      "  var w = window.open(targetUrl, 'impetus_manual');",
+      "  if (w) { w.focus(); }",
+      "} catch (e) {}",
+      "setTimeout(function() { window.close(); }, 150);",
+    }
+  else
+    script = {
+      "var targetUrl = '" .. js_url .. "';",
+      "try { document.getElementById('impetusManualForm').submit(); } catch (e) {}",
+      "setTimeout(function() { window.location.replace(targetUrl); }, 350);",
+    }
+  end
+  local html = {
+    "<!doctype html>",
+    '<meta charset="utf-8">',
+    "<title>Impetus manual launcher</title>",
+    '<form id="impetusManualForm" method="get" action="' .. js_url .. '" target="impetus_manual"></form>',
+    "<script>",
+  }
+  for _, line in ipairs(script) do
+    html[#html + 1] = line
+  end
+  html[#html + 1] = "</script>"
+  pcall(vim.fn.writefile, html, launcher)
+  local target = launcher
+
+  if vim.ui and vim.ui.open then
+    vim.ui.open(target)
+    return
+  end
+  if vim.fn.has("win32") == 1 then
+    vim.fn.jobstart(string.format('start "" "%s"', target), { detach = true })
+  elseif vim.fn.has("mac") == 1 then
+    vim.fn.jobstart({ "open", target }, { detach = true })
+  else
+    vim.fn.jobstart({ "xdg-open", target }, { detach = true })
   end
 end
 

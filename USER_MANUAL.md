@@ -136,6 +136,7 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 | Shortcut | Description                                               |
 | -------- | --------------------------------------------------------- |
 | `,h`     | Toggle right help pane (keyword signature + descriptions) |
+| `,H`     | Open full online manual page for the current keyword      |
 | `,,`     | Trigger reference / option completion popup               |
 | `,R`     | Same as `,,`                                              |
 | `,i`     | Toggle info pane (model statistics tree)                  |
@@ -486,7 +487,15 @@ Opens a fixed-width right-side window showing:
 
 The pane updates automatically as you move the cursor between keyword blocks.
 
-### 13.2 Quick Help Popup (`,u` / `:Chelp`)
+### 13.2 Online Manual (`,H`)
+
+Opens the Impetus online manual for the keyword under the cursor. For example, inside `*BC_MOTION`, it opens:
+
+`https://www.impetus.no/support/manual/?command=BC_MOTION`
+
+If no keyword block is found, it opens the manual home page instead. The plugin uses a small browser launcher to try to reuse/focus the existing manual tab when possible; browser behavior may vary.
+
+### 13.3 Quick Help Popup (`,u` / `:Chelp`)
 
 A centered floating window with all shortcuts and commands. Press `q`, `<Esc>`, or `<CR>` to close.
 

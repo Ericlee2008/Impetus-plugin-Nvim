@@ -3052,6 +3052,7 @@ local function show_cheatsheet_popup()
       title = "[Core Editing]",
       items = {
         { k("<localleader>h"), "Toggle right help pane (keyword docs)" },
+        { k("<localleader>H"), "Open full online manual for current keyword" },
         { k("<localleader>c"), "Toggle comment/uncomment current keyword block" },
         { "dk", "Cut current block (keyword/control) into register" },
         { k("<localleader>y"), "Yank current block (keyword/control) into register" },
