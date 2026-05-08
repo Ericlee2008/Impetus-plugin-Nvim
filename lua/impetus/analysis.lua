@@ -256,7 +256,7 @@ local function classify_ref_type(keyword, param_name)
     return "geometry"
   end
   if k:match("^%*SET_FACE") and (p:match("^range_") or p == "...") then
-    return "element"
+    return "node"
   end
   if p == "csysid" then
     return "coordinate_system"
@@ -765,7 +765,7 @@ local function parse_block_objects(lines, block, db)
       elseif kw_upper:match("^%*SET_NODE") then set_t = "node"
       elseif kw_upper:match("^%*SET_ELEMENT") then set_t = "element"
       elseif kw_upper:match("^%*SET_GEOMETRY") then set_t = "geometry"
-      elseif kw_upper:match("^%*SET_FACE") then set_t = "element"
+      elseif kw_upper:match("^%*SET_FACE") then set_t = "node"
       end
       for fi, v in ipairs(values) do
         local idv = value_as_id(v)
@@ -1282,7 +1282,7 @@ function M.suggest_object_values(bufnr, ctx, base)
     elseif kw:match("^%*SET_ELEMENT") then
       obj_type = "element"
     elseif kw:match("^%*SET_FACE") then
-      obj_type = "element"
+      obj_type = "node"
     end
   end
   -- Entype-based fallback: only for anonymous fields or explicit enid_* fields
@@ -1342,25 +1342,31 @@ local function scan_object_defs_from_lines(lines, file_path)
       -- *NODE and *ELEMENT_* have one definition per data row.
       local is_multi_row = current_kw == "*NODE" or (current_kw and current_kw:match("^%*ELEMENT"))
       if is_multi_row then
-        -- Light-weight scan: only extract the first field (ID) for *NODE/*ELEMENT.
+        -- Light-weight scan: extract ALL IDs from *NODE/*ELEMENT lines.
         -- Handles both comma-separated and whitespace-separated formats.
-        local first_token
+        local tokens = {}
         if raw:find(",", 1, true) then
-          first_token = trim(raw):match("^([^,]*)")
+          tokens = split_csv_outside_quotes(raw)
         else
-          first_token = trim(raw):match("^(%S+)")
+          -- Whitespace-separated: split and collect all tokens
+          for token in raw:gmatch("%S+") do
+            tokens[#tokens + 1] = token
+          end
         end
-        local idv = value_as_id(first_token)
-        if idv and idv ~= "0" then
-          defs[obj_type] = defs[obj_type] or {}
-          if not defs[obj_type][idv] then
-            defs[obj_type][idv] = {
-              row = i,
-              col = 0,
-              keyword = current_kw,
-              line = raw,
-              file = file_path,
-            }
+        -- Register each ID found in the line
+        for _, token in ipairs(tokens) do
+          local idv = value_as_id(token)
+          if idv and idv ~= "0" then
+            defs[obj_type] = defs[obj_type] or {}
+            if not defs[obj_type][idv] then
+              defs[obj_type][idv] = {
+                row = i,
+                col = 0,
+                keyword = current_kw,
+                line = raw,
+                file = file_path,
+              }
+            end
           end
         end
       elseif data_row_count == 1 then
@@ -1415,7 +1421,7 @@ local function scan_object_refs_from_lines(lines)
         elseif current_kw:match("^%*SET_NODE") then set_t = "node"
         elseif current_kw:match("^%*SET_ELEMENT") then set_t = "element"
         elseif current_kw:match("^%*SET_GEOMETRY") then set_t = "geometry"
-        elseif current_kw:match("^%*SET_FACE") then set_t = "element"
+        elseif current_kw:match("^%*SET_FACE") then set_t = "node"
         end
         refs[set_t] = refs[set_t] or {}
         for _, v in ipairs(values) do
@@ -1565,7 +1571,7 @@ function M.object_under_cursor(bufnr)
     elseif kw:match("^%*SET_ELEMENT") then
       obj_type = "element"
     elseif kw:match("^%*SET_FACE") then
-      obj_type = "element"
+      obj_type = "node"
     end
   end
   if not obj_type then return nil end
@@ -1864,6 +1870,183 @@ function M.warmup_cross_file_cache()
   vim.defer_fn(next_frame, 500)
 end
 
+-- Scan unopened file for object references with full location data
+-- Returns: list of { row, col, keyword, line, file }
+local function scan_unopened_file_refs(file_path, obj_type, id)
+  local refs = {}
+  local ok, lines = pcall(function()
+    local f = io.open(file_path, "r")
+    if not f then return nil end
+    local result = {}
+    for line in f:lines() do
+      table.insert(result, line)
+    end
+    f:close()
+    return result
+  end)
+  if not ok or not lines then return refs end
+
+  local current_kw = nil
+  local data_row_count = 0
+
+  for row_idx, raw in ipairs(lines) do
+    local kw = parse_keyword(raw)
+    if kw then
+      current_kw = kw:upper()
+      data_row_count = 0
+    elseif current_kw and not is_meta_line(raw) then
+      data_row_count = data_row_count + 1
+      local values = split_data_fields(raw)
+
+      -- *SET_* keywords and reference collection
+      local collect_refs = false
+      local ref_types = {}
+
+      if current_kw:match("^%*SET_") and data_row_count >= 2 then
+        if current_kw:match("^%*SET_PART") then ref_types.part = true
+        elseif current_kw:match("^%*SET_NODE") then ref_types.node = true
+        elseif current_kw:match("^%*SET_ELEMENT") then ref_types.element = true
+        elseif current_kw:match("^%*SET_GEOMETRY") then ref_types.geometry = true
+        elseif current_kw:match("^%*SET_FACE") then ref_types.node = true
+        end
+        collect_refs = true
+      end
+
+      if collect_refs and ref_types[obj_type] then
+        for _, v in ipairs(values) do
+          local idv = value_as_id(v)
+          if idv and idv == id then
+            table.insert(refs, {
+              row = row_idx,
+              col = 0,
+              keyword = current_kw,
+              line = raw,
+              file = file_path,
+            })
+          end
+        end
+      end
+
+      -- GEOMETRY_SEED_NODE references
+      if current_kw == "*GEOMETRY_SEED_NODE" and obj_type == "node" and data_row_count >= 2 then
+        for _, v in ipairs(values) do
+          local idv = value_as_id(v)
+          if idv and idv == id then
+            table.insert(refs, {
+              row = row_idx,
+              col = 0,
+              keyword = current_kw,
+              line = raw,
+              file = file_path,
+            })
+          end
+        end
+      end
+
+      -- *OUTPUT_USER and curve references
+      if current_kw == "*OUTPUT_USER" and obj_type == "curve" then
+        local fid_col = (data_row_count == 1) and 3 or 2
+        local fid = value_as_id(values[fid_col])
+        if fid and fid == id then
+          table.insert(refs, {
+            row = row_idx,
+            col = 0,
+            keyword = current_kw,
+            line = raw,
+            file = file_path,
+          })
+        end
+      end
+
+      -- fcn(id) / crv(id) / dfcn(id) references
+      if obj_type == "curve" then
+        local tv = trim(raw)
+        for match_id in tv:gmatch("fcn%s*%(%s*(%d+)%s*[,)]") do
+          if match_id == id then
+            table.insert(refs, {
+              row = row_idx,
+              col = 0,
+              keyword = current_kw,
+              line = raw,
+              file = file_path,
+            })
+            break
+          end
+        end
+        for match_id in tv:gmatch("crv%s*%(%s*(%d+)%s*[,)]") do
+          if match_id == id then
+            table.insert(refs, {
+              row = row_idx,
+              col = 0,
+              keyword = current_kw,
+              line = raw,
+              file = file_path,
+            })
+            break
+          end
+        end
+        for match_id in tv:gmatch("dfcn%s*%(%s*(%d+)%s*[,)]") do
+          if match_id == id then
+            table.insert(refs, {
+              row = row_idx,
+              col = 0,
+              keyword = current_kw,
+              line = raw,
+              file = file_path,
+            })
+            break
+          end
+        end
+      end
+    end
+  end
+
+  return refs
+end
+
+-- Build reverse include map: for each file, track which files include it
+-- Returns: { file_path -> {list of file paths that include this file} }
+local function build_reverse_include_map()
+  local reverse_map = {}
+  local visited = {}
+
+  local function process_buffer(bufnr, processed_bufs)
+    if processed_bufs[bufnr] then return end
+    processed_bufs[bufnr] = true
+
+    local buf_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":p")
+    if not buf_file or buf_file == "" then return end
+
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    local includes = collect_include_paths(bufnr, lines)
+
+    -- Record: included_file <- buf_file
+    for _, inc_file in ipairs(includes) do
+      reverse_map[inc_file] = reverse_map[inc_file] or {}
+      if not visited[buf_file .. "->" .. inc_file] then
+        visited[buf_file .. "->" .. inc_file] = true
+        table.insert(reverse_map[inc_file], buf_file)
+      end
+
+      -- Recursively process included files if loaded
+      local inc_bufnr = vim.fn.bufnr(inc_file)
+      if inc_bufnr > 0 and vim.api.nvim_buf_is_loaded(inc_bufnr) then
+        process_buffer(inc_bufnr, processed_bufs)
+      end
+    end
+  end
+
+  -- Process all open impetus buffers
+  local processed = {}
+  for _, bn in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(bn) and vim.bo[bn].filetype == "impetus" then
+      process_buffer(bn, processed)
+    end
+  end
+
+  return reverse_map
+end
+
 function M.object_references(bufnr, obj_type, id)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local all_refs = {}
@@ -1906,6 +2089,27 @@ function M.object_references(bufnr, obj_type, id)
       if ft == "impetus" then
         local bfile = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bn), ":p")
         collect_from_buffer(bn, bfile)
+      end
+    end
+  end
+
+  -- 4. Files that include current file (reverse include map)
+  local reverse_map = build_reverse_include_map()
+  if buf_file and reverse_map[buf_file] then
+    for _, parent_file in ipairs(reverse_map[buf_file]) do
+      local parent_bufnr = vim.fn.bufnr(parent_file)
+      if parent_bufnr > 0 and vim.api.nvim_buf_is_loaded(parent_bufnr) then
+        collect_from_buffer(parent_bufnr, parent_file)
+      else
+        -- For unopened files, scan from disk with full reference info
+        local unopened_refs = scan_unopened_file_refs(parent_file, obj_type, id)
+        for _, r in ipairs(unopened_refs) do
+          local key = string.format("%s:%d:%d", r.file, r.row or 0, r.col or 0)
+          if not seen[key] then
+            seen[key] = true
+            table.insert(all_refs, r)
+          end
+        end
       end
     end
   end
