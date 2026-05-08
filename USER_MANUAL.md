@@ -438,6 +438,8 @@ Triggered manually or via `<C-Space>` in insert mode. Provides:
 - **Object ID completion**: Context-aware suggestions (e.g., `typeid` suggests existing part IDs)
 - **Option completion**: For fields with enumerated options in `commands.help`
 
+Keyword completion only treats `*` as a keyword trigger when the text before it on the same line is whitespace. Typing `*` after existing non-space text, such as inside an expression, does not open keyword completion.
+
 ### 11.2 Blink.cmp Integration
 
 If `blink.cmp` is installed, the plugin provides a source `impetus_kw` that:
@@ -445,6 +447,7 @@ If `blink.cmp` is installed, the plugin provides a source `impetus_kw` that:
 - Expands keyword completion into snippet templates
 - Uses snippet placeholders so `<Tab>` jumps field-to-field
 - Supports `j`/`k` navigation and `<Space>` acceptance (when `blink_menu_keys = true`)
+- Retriggers keyword completion on `*` only at the start of a keyword line, allowing indentation but ignoring inline `*` operators
 
 ### 11.3 Ref/Option Completion (`,,` / `,R`)
 
@@ -534,6 +537,8 @@ Analyzes whether the object under cursor can be safely deleted without breaking 
 - Function signature
 - Return type
 - Description
+
+The `gh` popup is rendered as plain help text: only its header and divider receive manual popup styling, and intrinsic names mentioned inside the description are not re-highlighted as code.
 
 Intrinsic highlighting is context-aware in common non-expression fields. The filename/path row under `*INCLUDE` is treated as plain text, so names such as `sin_material.k` or folders named `x` do not accidentally receive intrinsic colors; title rows and later numeric rows keep their normal syntax highlighting. Parameter names on the left side of `*PARAMETER` and `*PARAMETER_DEFAULT` definitions are also plain text; the expression on the right side still highlights intrinsic functions and variables, for example `angle = sin(t)`.
 

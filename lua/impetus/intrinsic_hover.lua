@@ -292,6 +292,13 @@ function M.show()
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype = "impetus_hover"
+  vim.bo[buf].syntax = "OFF"
+  vim.b[buf].impetus_help_buffer = 1
+  vim.b[buf].impetus_intrinsic_applied = 1
+  pcall(vim.api.nvim_buf_call, buf, function()
+    vim.cmd("silent! syntax clear")
+  end)
   vim.bo[buf].modifiable = false
 
   -- Calculate window size

@@ -70,6 +70,11 @@ function Source:get_completions(context, resolve)
   local keyword_ctx = is_keyword_context(line, cur_col)
   local is_comma_trigger = context.trigger and context.trigger.kind == 2 and context.trigger.character == ","
 
+  if base:sub(1, 1) == "*" and not keyword_ctx then
+    resolve({ is_incomplete_forward = false, is_incomplete_backward = false, items = {} })
+    return
+  end
+
   if not keyword_ctx and not is_comma_trigger and #base < (self.opts.min_keyword_length or 1) then
     resolve({ is_incomplete_forward = false, is_incomplete_backward = false, items = {} })
     return

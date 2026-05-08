@@ -982,7 +982,7 @@ local function setup_filetype_behaviors()
           return
         end
         local left = line:sub(1, col)
-        if left:match("%*$") then
+        if left:match("^%s*%*$") then
           blink.show()
         end
       end,

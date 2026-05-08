@@ -25,9 +25,10 @@
 15. [Modification 14: Cross-File Object Resolution (Local-First)](#15-modification-14-cross-file-object-resolution-local-first)
 16. [Modification 15: Comprehensive English User Manual](#16-modification-15-comprehensive-english-user-manual)
 17. [Modification 16: Intrinsic Highlight Context Masks](#17-modification-16-intrinsic-highlight-context-masks)
-18. [Performance Analysis & Efficiency](#18-performance-analysis--efficiency)
-19. [Known Limitations & Future Work](#19-known-limitations--future-work)
-20. [Appendix A: Modified Files Index](#appendix-a-modified-files-index)
+18. [Modification 17: Keyword Completion Star Context](#18-modification-17-keyword-completion-star-context)
+19. [Performance Analysis & Efficiency](#19-performance-analysis--efficiency)
+20. [Known Limitations & Future Work](#20-known-limitations--future-work)
+21. [Appendix A: Modified Files Index](#appendix-a-modified-files-index)
 
 ---
 
@@ -710,10 +711,11 @@ Add a context mask in `lua/impetus/intrinsic.lua` using high-priority extmarks. 
   - Mask only the left-hand parameter name inside `*PARAMETER` and `*PARAMETER_DEFAULT`.
   - Leave right-hand expressions untouched so `x = sin(t)` still highlights `sin` and `t`.
   - Attach a lightweight buffer listener so masks refresh after edits.
+  - Render the `gh` intrinsic hover popup with `filetype=impetus_hover` and `syntax=OFF` so descriptions remain plain help text.
 
 ### 17.4 Result
 
-Include filenames/paths and parameter names no longer show false intrinsic colors, while include numeric rows and real expression usage still highlight normally.
+Include filenames/paths and parameter names no longer show false intrinsic colors, while include numeric rows and real expression usage still highlight normally. Intrinsic hover descriptions also avoid accidental re-highlighting inside the popup.
 
 ### 17.5 Pros
 
@@ -728,9 +730,32 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 
 ---
 
-## 18. Performance Analysis & Efficiency
+## 18. Modification 17: Keyword Completion Star Context
 
-### 18.1 Current Performance Characteristics
+### 18.1 Background / Problem
+
+Typing `*` anywhere in insert mode could trigger keyword completion, even when the star was part of an inline expression or text after other non-space characters.
+
+### 18.2 Solution
+
+Restrict keyword completion to keyword-line context only: the text before `*` on the same line must be whitespace. This still allows indented keyword lines, but avoids popup noise for inline `*` operators.
+
+### 18.3 Implementation Path
+
+- **Files:** `lua/impetus/init.lua`, `lua/impetus/blink_source.lua`
+- **Changes:**
+  - `TextChangedI` retrigger now calls `blink.show()` only when the left side matches `^%s*%*$`.
+  - The Blink source returns no items when the completion base starts with `*` but the cursor is not in keyword context.
+
+### 18.4 Result
+
+Typing `*` at the start of a keyword line, with optional indentation, still opens keyword completion. Typing `*` after existing non-space text, such as `abc *` or `x*`, no longer opens keyword completion.
+
+---
+
+## 19. Performance Analysis & Efficiency
+
+### 19.1 Current Performance Characteristics
 
 | Operation                       | Typical Time (2k lines) | Bottleneck                                    |
 | ------------------------------- | ----------------------- | --------------------------------------------- |
@@ -742,7 +767,7 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 | `:re -a` (replace + evaluate)   | 50–100 ms               | Expression evaluation + buffer rewrite        |
 | Info pane render                | 30–50 ms                | Tree formatting + highlight application       |
 
-### 18.2 Big-O Complexity
+### 19.2 Big-O Complexity
 
 | Function                        | Complexity     | Notes                                         |
 | ------------------------------- | -------------- | --------------------------------------------- |
@@ -753,7 +778,7 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 | `check_physics_sanity`          | O(L × F)       | Physics check per numeric field               |
 | `eval_expr_fast`                | O(E)           | E = expression length; cached                 |
 
-### 18.3 Optimization Opportunities (Ranked by Impact)
+### 19.3 Optimization Opportunities (Ranked by Impact)
 
 1. **Disk I/O Cache (High Impact, Medium Effort)**
    
@@ -786,9 +811,9 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 
 ---
 
-## 19. Known Limitations & Future Work
+## 20. Known Limitations & Future Work
 
-### 19.1 Current Limitations
+### 20.1 Current Limitations
 
 | #   | Limitation                                           | Severity | Workaround                                                       |
 | --- | ---------------------------------------------------- | -------- | ---------------------------------------------------------------- |
@@ -803,7 +828,7 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 | 9   | `eval_expr_fast` does not support math functions     | Low      | Use solver-side evaluation for complex expressions               |
 | 10  | Unit system aliases are hardcoded                    | Low      | Update `unit_system_aliases` when new systems are added          |
 
-### 19.2 Proposed Future Features
+### 20.2 Proposed Future Features
 
 1. **Global Object Registry Cache**
    
@@ -843,6 +868,8 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 | `lua/impetus/side_help.lua`             | Optional-ID offset in help rendering                                                                                                                         | ~100        | ~20           |
 | `lua/impetus/info.lua`                  | Command tree folding, `foldexpr`, `,f` binding                                                                                                               | ~150        | ~20           |
 | `lua/impetus/intrinsic.lua`             | Context masks for intrinsic highlighting in `*INCLUDE`, `*PARAMETER`, and `*PARAMETER_DEFAULT` non-expression fields                                         | ~70         | 0             |
+| `lua/impetus/blink_source.lua`          | Suppress keyword completion for inline `*` outside keyword-line context                                                                                       | ~5          | 0             |
+| `lua/impetus/init.lua`                  | Restrict insert-mode `*` retrigger to keyword-line context                                                                                                    | ~1          | ~1            |
 | `lua/impetus/log.lua`                   | New file: unified logger                                                                                                                                     | ~40         | 0             |
 | `USER_MANUAL.md`                        | Comprehensive manual; intrinsic highlight context rules                                                                                                      | ~630        | 0             |
 | `README.md`                             | Updated features list                                                                                                                                        | ~10         | ~10           |
