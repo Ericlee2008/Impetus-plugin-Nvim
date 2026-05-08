@@ -37,20 +37,22 @@ Created a new syntax region `impetusIntrinsicFunctionCall` that matches function
 
 ```vim
 syntax region impetusIntrinsicFunctionCall 
-  start=/[a-zA-Z_][a-zA-Z0-9_]*\s*\zs(/ 
+  matchgroup=NONE
+  start=/\<[a-zA-Z_][a-zA-Z0-9_]*\s*(/ 
   end=/)/ 
   transparent
 ```
 
 This region:
-- Uses `\zs` (zero-width assertion) to start matching AFTER the function name
-- Only marks parentheses and their contents, not the function name
+- Matches the entire function call: function name + parentheses + content
+- `matchgroup=NONE` ensures parentheses keep their default color (not recolored)
+- `transparent` makes the region invisible - it only creates a scope boundary
 - Function name is still highlighted by the function matching rule (green)
-- Parentheses and arguments keep their normal syntax coloring
-- The region is invisible (`transparent`) - it only defines a scope boundary
-- Is excluded from variable/symbol matching via `containedin` in their rules
+- Variables are excluded from this entire region via `containedin` rules
 
-**Result:** `dxs(2)` shows as `dxs` (green) + `(2)` (normal color), not `dxs` split by variable highlighting
+**Key difference:** By covering the entire function call (including the function name), we prevent variable rules from matching anywhere inside it - including within the function name itself.
+
+**Result:** `dxs(2)` shows as `dxs` (green) + `(2)` (normal color), not `dxs` split by variable highlighting inside the name
 
 ## Test Cases
 
