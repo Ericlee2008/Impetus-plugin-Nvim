@@ -21,38 +21,42 @@ The variable highlighting syntax rule was matching any occurrence of the variabl
 
 ## Solution
 
-Created a new syntax region `impetusIntrinsicFunctionCall` that matches function call syntax (identifier followed by parentheses). This region is now excluded from variable and symbol matching rules.
+Use **negative lookahead** in variable matching rules to prevent variables from matching when they're part of a function name.
 
 ### Changes Made
 
 1. **syntax/impetus.vim**
-   - Added `impetusIntrinsicFunctionCall` syntax region
-   - Updated hardcoded variable rules to exclude this region
+   - Added negative lookahead to hardcoded variable rules
+   - Pattern: `/\%([[:alnum:]_]\)\@<!VAR\%([[:alnum:]_]*\s*(\)\@!/`
+   - Means: match VAR only if NOT followed by optional word chars and `(`
 
 2. **lua/impetus/intrinsic.lua**
-   - Updated dynamically injected variable rules to exclude the region
-   - Updated symbol rules to exclude the region
+   - Applied same negative lookahead to dynamically injected variable rules
+   - Removed unnecessary `impetusIntrinsicFunctionCall` region exclusions
 
 ### How It Works
 
 ```vim
-syntax region impetusIntrinsicFunctionCall 
-  matchgroup=NONE
-  start=/\<[a-zA-Z_][a-zA-Z0-9_]*\s*(/ 
-  end=/)/ 
-  transparent
+syntax match impetusIntrinsicVariable 
+  /\%([[:alnum:]_]\)\@<!x\%([[:alnum:]_]*\s*(\)\@!/
 ```
 
-This region:
-- Matches the entire function call: function name + parentheses + content
-- `matchgroup=NONE` ensures parentheses keep their default color (not recolored)
-- `transparent` makes the region invisible - it only creates a scope boundary
-- Function name is still highlighted by the function matching rule (green)
-- Variables are excluded from this entire region via `containedin` rules
+The negative lookahead `\%([[:alnum:]_]*\s*(\)\@!` means:
+- **Don't match** if the variable is followed by:
+  - Zero or more word characters (forming function name)
+  - Optional whitespace
+  - Opening parenthesis `(`
 
-**Key difference:** By covering the entire function call (including the function name), we prevent variable rules from matching anywhere inside it - including within the function name itself.
+### Examples
 
-**Result:** `dxs(2)` shows as `dxs` (green) + `(2)` (normal color), not `dxs` split by variable highlighting inside the name
+| Pattern | Matches? | Reason |
+|---------|----------|--------|
+| `dxs(2)` | ❌ No | `x` is part of function name before `(` |
+| `sqrt(t)` | ✓ Yes | `t` is inside parentheses, not before `(` |
+| `x + 5` | ✓ Yes | `x` not followed by word chars and `(` |
+| `max_x(v)` | ❌ No | `x` is part of function name |
+
+**Result:** Clean highlighting without coloring parentheses or their contents
 
 ## Test Cases
 
