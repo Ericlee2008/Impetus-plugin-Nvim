@@ -1,7 +1,7 @@
 interface:
   display_name: "Impetus Help Sync"
   short_description: "Sync Impetus help and docs"
-  default_prompt: "Use $impetus-help-sync when editing impetus.nvim shortcuts or commands so the ,u mini help and Markdown docs stay synchronized."
+  default_prompt: "Use $impetus-help-sync when editing impetus.nvim user-visible behavior, including bug fixes, new features, shortcuts, or commands, so Markdown docs and the ,u mini help stay synchronized."
 
 policy:
   allow_implicit_invocation: true

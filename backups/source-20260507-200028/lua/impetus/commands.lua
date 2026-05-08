@@ -951,60 +951,64 @@ local function advanced_clear_current_buffer()
   return removed, entries
 end
 
--- Align parameter definition lines: equals signs first, then values, then comments/descriptions
--- Step 1: Align = signs (lhs right-aligned, " = " with one space on each side)
--- Step 2: Align values and subsequent content (descriptions or comments)
-local function align_parameter_definitions_comprehensive(block_lines)
+-- Split a parameter definition line into (indent, lhs, rhs, desc).
+-- Desc is the part after the LAST comma (typically a quoted description).
+-- Returns nil if the line is not a parameter definition.
+local function split_param_line(line)
+  local indent, lhs, rest = line:match("^(%s*)(%%?[%a_][%w_]*)%s*=%s*(.-)%s*$")
+  if not lhs then
+    return nil
+  end
+
+  -- Search from right to left for the last ", \"desc\"" pattern
+  local desc_start = nil
+  for pos = #rest - 1, 1, -1 do
+    if rest:sub(pos):match('^,%s*"[^"]*"%s*$') then
+      desc_start = pos
+      break
+    end
+  end
+
+  if desc_start then
+    local rhs = trim(rest:sub(1, desc_start - 1))
+    local desc = trim(rest:sub(desc_start + 1))  -- drop the comma itself
+    return indent, lhs, rhs, desc
+  end
+
+  -- Fallback: plain comma (no quotes) — use the LAST comma to avoid
+  -- splitting expressions like crv(1, x)
+  local last_comma = nil
+  for pos = #rest, 1, -1 do
+    if rest:sub(pos, pos) == "," then
+      last_comma = pos
+      break
+    end
+  end
+  if last_comma then
+    local rhs = trim(rest:sub(1, last_comma - 1))
+    local desc = trim(rest:sub(last_comma + 1))
+    if desc ~= "" then
+      return indent, lhs, rhs, desc
+    end
+  end
+
+  return indent, lhs, trim(rest), nil
+end
+
+local function format_parameter_definition_lines(block_lines)
   local specs = {}
   local max_lhs = 0
-  local max_value = 0
-  local has_comment = false
-  local has_desc = false
 
   for i, line in ipairs(block_lines or {}) do
-    local indent, lhs, rest = line:match("^(%s*)(%%?[%a_][%w_]*)%s*=%s*(.-)%s*$")
-    if lhs and rest ~= "" then
-      -- Try to find comment (#) first
-      local hash_pos = rest:find("#")
-      local value, comment = nil, nil
-      if hash_pos then
-        value = trim(rest:sub(1, hash_pos - 1))
-        comment = rest:sub(hash_pos)
-        has_comment = true
-      else
-        value = trim(rest)
-        comment = nil
-      end
-
-      -- Try to find description (comma-quoted) if no comment
-      local desc = nil
-      if not comment then
-        local desc_start = nil
-        for pos = #rest - 1, 1, -1 do
-          if rest:sub(pos):match('^,%s*"[^"]*"%s*$') then
-            desc_start = pos
-            break
-          end
-        end
-        if desc_start then
-          value = trim(rest:sub(1, desc_start - 1))
-          desc = trim(rest:sub(desc_start + 1))
-          has_desc = true
-        end
-      end
-
-      if value ~= "" then
-        specs[i] = {
-          indent = indent or "",
-          lhs = lhs,
-          value = value,
-          comment = comment,
-          desc = desc,
-          line = line,
-        }
-        max_lhs = math.max(max_lhs, #lhs)
-        max_value = math.max(max_value, #value)
-      end
+    local indent, lhs, rhs, desc = split_param_line(line)
+    if lhs and rhs and rhs ~= "" then
+      specs[i] = {
+        indent = indent or "",
+        lhs = lhs,
+        rhs = rhs,
+        desc = desc,
+      }
+      max_lhs = math.max(max_lhs, #lhs)
     end
   end
 
@@ -1012,10 +1016,17 @@ local function align_parameter_definitions_comprehensive(block_lines)
     return block_lines
   end
 
-  -- Calculate alignment columns
-  -- Step 1: Parameter names are flush-left (indent + name), padded on right to align equals signs
-  -- Step 2: Values aligned after " = "
-  -- Step 3: Comments/descriptions aligned after longest value + 2 spaces
+  -- Compute max_prefix_len: the longest visual length from indent to the
+  -- comma (inclusive) so that all opening quotes line up in the same column.
+  local max_prefix_len = 0
+  for _, spec in pairs(specs) do
+    if spec.desc then
+      local lhs_pad_len = math.max(1, max_lhs - #spec.lhs + 1)
+      -- indent + lhs + lhs_pad + "= " + rhs + ","
+      local prefix_len = #spec.indent + #spec.lhs + lhs_pad_len + 2 + #spec.rhs + 1
+      max_prefix_len = math.max(max_prefix_len, prefix_len)
+    end
+  end
 
   local out = {}
   for i, line in ipairs(block_lines or {}) do
@@ -1023,29 +1034,19 @@ local function align_parameter_definitions_comprehensive(block_lines)
     if not spec then
       out[#out + 1] = line
     else
-      -- Step 1: Align equals sign (pad name on the RIGHT, not left)
-      local rhs_pad = string.rep(" ", max_lhs - #spec.lhs)
-      local text = spec.indent .. spec.lhs .. rhs_pad .. " = "
-
-      -- Step 2: Add value with alignment for subsequent content
-      local value_pad = ""
-      if spec.comment or spec.desc then
-        -- If there's comment or desc, right-pad the value so they align
-        value_pad = string.rep(" ", max_value - #spec.value)
+      local lhs_pad = string.rep(" ", math.max(1, max_lhs - #spec.lhs + 1))
+      local text = spec.indent .. spec.lhs .. lhs_pad .. "= " .. spec.rhs
+      if spec.desc then
+        local prefix_len = #spec.indent + #spec.lhs + #lhs_pad + 2 + #spec.rhs + 1
+        local spaces_needed = max_prefix_len - prefix_len + 1
+        if spaces_needed < 1 then
+          spaces_needed = 1
+        end
+        text = text .. "," .. string.rep(" ", spaces_needed) .. spec.desc
       end
-      text = text .. spec.value .. value_pad
-
-      -- Step 3: Add comment or description with spacing
-      if spec.comment then
-        text = text .. "  " .. spec.comment
-      elseif spec.desc then
-        text = text .. ", " .. spec.desc
-      end
-
       out[#out + 1] = text
     end
   end
-
   return out
 end
 
@@ -1259,9 +1260,10 @@ local function simple_beautify_buffer()
 
     local formatted = nil
     if kw_upper == "*PARAMETER" or kw_upper == "*PARAMETER_DEFAULT" then
-      -- 规范化表达式运算符，然后对齐参数定义
+      -- 双引号对齐优先：先规范化表达式运算符（避免对齐后 rhs 长度变化），
+      -- 再对齐 name = value, "desc"
       formatted = normalize_expression_lines(block_lines)
-      formatted = align_parameter_definitions_comprehensive(formatted)
+      formatted = format_parameter_definition_lines(formatted)
     elseif kw_upper == "*CURVE" or kw_upper == "*TABLE" or kw_upper == "*PATH"
         or kw_upper == "*NODE" or kw_upper:match("^%*ELEMENT") then
       -- 列对齐优先：不对齐后再用 normalize_comma_lines 破坏列宽
@@ -1325,7 +1327,7 @@ local function align_parameter_blocks_in_buffer()
 
     local formatted = nil
     if b.keyword == "*PARAMETER" or b.keyword == "*PARAMETER_DEFAULT" then
-      formatted = align_parameter_definitions_comprehensive(block_lines)
+      formatted = format_parameter_definition_lines(block_lines)
     elseif kw_upper == "*OBJECT" then
       local param_start = nil
       for li, line in ipairs(block_lines) do
@@ -1339,7 +1341,7 @@ local function align_parameter_blocks_in_buffer()
         for li = param_start, #block_lines do
           param_lines[#param_lines + 1] = block_lines[li]
         end
-        local formatted_params = align_parameter_definitions_comprehensive(param_lines)
+        local formatted_params = format_parameter_definition_lines(param_lines)
         formatted = {}
         for li = 1, param_start - 1 do
           formatted[li] = block_lines[li]
@@ -3430,10 +3432,6 @@ function M.register()
   vim.api.nvim_create_user_command("ImpetusClean", run_clean_command, { nargs = "*" })
   vim.api.nvim_create_user_command("ImpetusClear", run_clean_command, { nargs = "*" })
 
-  vim.api.nvim_create_user_command("ImpetusDebugRefs", function()
-    M.show_buffer_refs()
-  end, {})
-
   local function parse_re_args(args_str)
     local args = trim(args_str or "")
     if args:find("%f[%S]%-c%f[%s]") ~= nil or args == "-c" then
@@ -3836,42 +3834,6 @@ function M.register()
     end
     return vim.api.nvim_replace_termcodes("<CR>", true, false, true)
   end, { expr = true, noremap = true })
-end
-
--- Debug: show object references for current buffer and cross-file definitions
-function M.show_buffer_refs()
-  local bufnr = vim.api.nvim_get_current_buf()
-  local idx = analysis.build_buffer_index(bufnr)
-  local cross = analysis.build_cross_file_object_index(bufnr)
-
-  local msg = "=== Object References in current buffer ===\n"
-  local ref_count = 0
-  for obj_type, refs in pairs(idx.object_refs or {}) do
-    for idv, list in pairs(refs) do
-      for i, info in ipairs(list) do
-        ref_count = ref_count + 1
-        local has_cross_def = (cross.defs[obj_type] or {})[idv] ~= nil
-        local mark_status = has_cross_def and "✓" or "✗"
-        msg = msg .. string.format("  [%d] %s[%s] @ row %d col %d  %s\n", ref_count, obj_type, idv, info.row, info.col, mark_status)
-      end
-    end
-  end
-
-  if ref_count == 0 then
-    msg = "No object references found."
-  else
-    msg = msg .. string.format("\nTotal references found: %d\n", ref_count)
-    msg = msg .. "\n=== Cross-file Element Definitions ===\n"
-    local elem_defs = cross.defs["element"] or {}
-    if next(elem_defs) then
-      msg = msg .. "  " .. table.concat(vim.tbl_keys(elem_defs), ", ") .. "\n"
-    else
-      msg = msg .. "  (none)\n"
-    end
-  end
-
-  print(msg)
-  vim.notify(msg, vim.log.levels.INFO)
 end
 
 return M

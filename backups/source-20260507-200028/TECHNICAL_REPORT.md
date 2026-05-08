@@ -24,10 +24,9 @@
 14. [Modification 13: Info Window Command Tree Folding](#14-modification-13-info-window-command-tree-folding)
 15. [Modification 14: Cross-File Object Resolution (Local-First)](#15-modification-14-cross-file-object-resolution-local-first)
 16. [Modification 15: Comprehensive English User Manual](#16-modification-15-comprehensive-english-user-manual)
-17. [Modification 16: Intrinsic Highlight Context Masks](#17-modification-16-intrinsic-highlight-context-masks)
-18. [Performance Analysis & Efficiency](#18-performance-analysis--efficiency)
-19. [Known Limitations & Future Work](#19-known-limitations--future-work)
-20. [Appendix A: Modified Files Index](#appendix-a-modified-files-index)
+17. [Performance Analysis & Efficiency](#17-performance-analysis--efficiency)
+18. [Known Limitations & Future Work](#18-known-limitations--future-work)
+19. [Appendix A: Modified Files Index](#appendix-a-modified-files-index)
 
 ---
 
@@ -686,51 +685,9 @@ A single source of truth for users.
 
 ---
 
-## 17. Modification 16: Intrinsic Highlight Context Masks
+## 17. Performance Analysis & Efficiency
 
-### 17.1 Background / Problem
-
-Intrinsic functions and variables from `intrinsic.k` are highlighted globally inside Impetus buffers. This caused false intrinsic colors in non-expression text:
-
-- The filename/path row under `*INCLUDE`, such as `x/sin/pi_material.k`
-- Parameter names on the left side of `*PARAMETER` and `*PARAMETER_DEFAULT`
-
-Those fields are identifiers or paths, not mathematical expressions, so intrinsic coloring was misleading.
-
-### 17.2 Solution
-
-Add a context mask in `lua/impetus/intrinsic.lua` using high-priority extmarks. The mask preserves the existing syntax injection from `intrinsic.k`, but overlays plain `Normal` highlighting only where intrinsic colors should be suppressed.
-
-### 17.3 Implementation Path
-
-- **File:** `lua/impetus/intrinsic.lua`
-- **Rules:**
-  - Mask only the detected filename/path row inside `*INCLUDE` blocks.
-  - Preserve `*INCLUDE` title rows and later numeric rows so they keep normal syntax highlighting.
-  - Mask only the left-hand parameter name inside `*PARAMETER` and `*PARAMETER_DEFAULT`.
-  - Leave right-hand expressions untouched so `x = sin(t)` still highlights `sin` and `t`.
-  - Attach a lightweight buffer listener so masks refresh after edits.
-
-### 17.4 Result
-
-Include filenames/paths and parameter names no longer show false intrinsic colors, while include numeric rows and real expression usage still highlight normally.
-
-### 17.5 Pros
-
-- **Low risk:** Existing intrinsic syntax rules are unchanged.
-- **Context-aware:** Only the non-expression ranges are suppressed.
-- **Responsive:** Masks refresh after buffer edits.
-
-### 17.6 Cons
-
-- **Overlay-based:** Uses extmark highlight priority rather than preventing the underlying syntax match.
-- **Rule-specific:** Additional non-expression contexts may need their own masks later.
-
----
-
-## 18. Performance Analysis & Efficiency
-
-### 18.1 Current Performance Characteristics
+### 17.1 Current Performance Characteristics
 
 | Operation                       | Typical Time (2k lines) | Bottleneck                                    |
 | ------------------------------- | ----------------------- | --------------------------------------------- |
@@ -742,7 +699,7 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 | `:re -a` (replace + evaluate)   | 50–100 ms               | Expression evaluation + buffer rewrite        |
 | Info pane render                | 30–50 ms                | Tree formatting + highlight application       |
 
-### 18.2 Big-O Complexity
+### 17.2 Big-O Complexity
 
 | Function                        | Complexity     | Notes                                         |
 | ------------------------------- | -------------- | --------------------------------------------- |
@@ -753,7 +710,7 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 | `check_physics_sanity`          | O(L × F)       | Physics check per numeric field               |
 | `eval_expr_fast`                | O(E)           | E = expression length; cached                 |
 
-### 18.3 Optimization Opportunities (Ranked by Impact)
+### 17.3 Optimization Opportunities (Ranked by Impact)
 
 1. **Disk I/O Cache (High Impact, Medium Effort)**
    
@@ -786,9 +743,9 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 
 ---
 
-## 19. Known Limitations & Future Work
+## 18. Known Limitations & Future Work
 
-### 19.1 Current Limitations
+### 18.1 Current Limitations
 
 | #   | Limitation                                           | Severity | Workaround                                                       |
 | --- | ---------------------------------------------------- | -------- | ---------------------------------------------------------------- |
@@ -803,7 +760,7 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 | 9   | `eval_expr_fast` does not support math functions     | Low      | Use solver-side evaluation for complex expressions               |
 | 10  | Unit system aliases are hardcoded                    | Low      | Update `unit_system_aliases` when new systems are added          |
 
-### 19.2 Proposed Future Features
+### 18.2 Proposed Future Features
 
 1. **Global Object Registry Cache**
    
@@ -842,9 +799,8 @@ Include filenames/paths and parameter names no longer show false intrinsic color
 | `lua/impetus/actions.lua`               | `show_ref_completion` hardcoded options, option popup                                                                                                        | ~200        | ~50           |
 | `lua/impetus/side_help.lua`             | Optional-ID offset in help rendering                                                                                                                         | ~100        | ~20           |
 | `lua/impetus/info.lua`                  | Command tree folding, `foldexpr`, `,f` binding                                                                                                               | ~150        | ~20           |
-| `lua/impetus/intrinsic.lua`             | Context masks for intrinsic highlighting in `*INCLUDE`, `*PARAMETER`, and `*PARAMETER_DEFAULT` non-expression fields                                         | ~70         | 0             |
 | `lua/impetus/log.lua`                   | New file: unified logger                                                                                                                                     | ~40         | 0             |
-| `USER_MANUAL.md`                        | Comprehensive manual; intrinsic highlight context rules                                                                                                      | ~630        | 0             |
+| `USER_MANUAL.md`                        | New file: comprehensive manual                                                                                                                               | ~628        | 0             |
 | `README.md`                             | Updated features list                                                                                                                                        | ~10         | ~10           |
 | `IMPETUS_NVIM_COMMANDS_SHORTCUTS_v1.md` | Minor updates                                                                                                                                                | ~5          | ~5            |
 

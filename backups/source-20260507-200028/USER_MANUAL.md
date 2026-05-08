@@ -535,8 +535,6 @@ Analyzes whether the object under cursor can be safely deleted without breaking 
 - Return type
 - Description
 
-Intrinsic highlighting is context-aware in common non-expression fields. The filename/path row under `*INCLUDE` is treated as plain text, so names such as `sin_material.k` or folders named `x` do not accidentally receive intrinsic colors; title rows and later numeric rows keep their normal syntax highlighting. Parameter names on the left side of `*PARAMETER` and `*PARAMETER_DEFAULT` definitions are also plain text; the expression on the right side still highlights intrinsic functions and variables, for example `angle = sin(t)`.
-
 ---
 
 ## 17. Operation Log File

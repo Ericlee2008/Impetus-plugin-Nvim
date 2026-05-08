@@ -12,7 +12,6 @@ syntax match impetusParam /%\h\w*/
 syntax match impetusRepeatVar /\v\[r[0-9]+\]/
 syntax match impetusNumber /\%([[:alnum:]_%.\/\\%]\)\@<![-+]\=\d\+\%(\.\d\+\)\=\%([eE][-+]\=\d\+\)\=\%([[:alnum:]_%.\/\\]\)\@!/
 syntax match impetusComment /^\s*[#$].*/
-syntax match impetusComment /[#$].*/
 syntax region impetusString start=/"/ end=/"/ keepend
 syntax match impetusEmptyField /^\s\+\ze,/ containedin=ALLBUT,impetusComment,impetusString
 syntax match impetusEmptyField /,\zs\s\+\ze,/ containedin=ALLBUT,impetusComment,impetusString
@@ -26,18 +25,12 @@ syntax match impetusFieldName /^\s*[[:alnum:]_%%\[\]]\+\s*:\s*/ contains=impetus
 
 " Intrinsic categories (injected by Lua from intrinsic.k):
 " impetusIntrinsicFunction / impetusIntrinsicVariable / impetusIntrinsicSymbol
-
-" Define a syntax region for function calls to prevent variables from matching
-" inside function parentheses (e.g., prevent 'x' in 'dxs(...)' from being highlighted as variable)
-syntax region impetusIntrinsicFunctionCall matchgroup=impetusIntrinsicFunction start=/\<[a-zA-Z_][a-zA-Z0-9_]*\s*(/ end=/)/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword fold transparent
-
 " Hard-code common intrinsic variables so they always highlight even if
 " intrinsic.k dynamic injection fails.
 " Use explicit alnum boundary (not \< \>) because the user may extend
 " iskeyword to include '-' for keywords like *change_p-order.
-" Exclude impetusIntrinsicFunctionCall to prevent matching inside function calls
 for s:var in ['pi', 'dt', 't', 'term', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'xnorm', 'ynorm', 'znorm']
-  execute 'syntax match impetusIntrinsicVariable /\%([[:alnum:]_]\)\@<!' . s:var . '\%([[:alnum:]_]\)\@!/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword,impetusIntrinsicFunctionCall'
+  execute 'syntax match impetusIntrinsicVariable /\%([[:alnum:]_]\)\@<!' . s:var . '\%([[:alnum:]_]\)\@!/' 
 endfor
 unlet s:var
 

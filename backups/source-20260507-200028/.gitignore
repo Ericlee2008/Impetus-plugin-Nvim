@@ -1,0 +1,19 @@
+# Logs
+impetus_nvim.log
+
+# Temporary / generated scripts
+_fix_*
+tmp_*
+*_test.lua
+check_schema.lua
+_kwlist.txt
+
+# Test files
+test_*.k
+test_gd_jump.lua
+
+# Backups
+*.bak.*
+
+# Archives
+*.zip

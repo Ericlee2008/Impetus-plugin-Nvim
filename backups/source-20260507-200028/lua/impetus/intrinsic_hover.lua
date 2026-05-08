@@ -293,6 +293,7 @@ function M.show()
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = "impetus"
 
   -- Calculate window size
   local max_width = 0
