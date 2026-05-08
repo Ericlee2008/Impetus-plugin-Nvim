@@ -413,6 +413,8 @@ Context-aware jump:
 3. **On object reference field** (e.g., `pid`, `mid`, `gid`, `tabid`): Jumps to the keyword block that defines that ID (e.g., `tabid` → `*TABLE`)
 4. **On definition keyword** (e.g., `*PART` line): Notifies that you are already at the definition
 
+When multiple `%params` appear in one bracket expression, such as `[%tend/%num_ascii]`, `gd` uses the exact parameter under the cursor rather than the first parameter in the brackets.
+
 If the target is in another file, it opens in a left-side navigation split.
 
 ### 10.2 `gr` — Find References

@@ -31,9 +31,18 @@ local function param_under_cursor()
       break
     end
     if col >= s and col <= e then
-      local pname = (inner or ""):match("%%([%a_][%w_]*)")
-      if pname then
-        return pname
+      local inner_search = 1
+      while inner_search <= #inner do
+        local ps, pe, pname = inner:find("%%([%a_][%w_]*)", inner_search)
+        if not ps then
+          break
+        end
+        local abs_s = s + ps
+        local abs_e = s + pe
+        if col >= abs_s and col <= abs_e then
+          return pname
+        end
+        inner_search = pe + 1
       end
     end
     bsearch = e + 1
