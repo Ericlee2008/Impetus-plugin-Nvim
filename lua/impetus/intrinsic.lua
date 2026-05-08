@@ -319,8 +319,9 @@ function M.apply_syntax_for_current_buffer()
     for _, var in ipairs(global_vars) do
       if not added[var] then
         added[var] = true
-        -- Exclude impetusIntrinsicFunctionCall to prevent variables matching inside function calls
-        vim.cmd("silent! syntax match impetusIntrinsicVariable /\\%([[alnum:]_]\\)\\@<!" .. vim.pesc(var) .. "\\%([[alnum:]_]\\)\\@!/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword,impetusIntrinsicFunctionCall")
+        -- Use negative lookahead to prevent matching inside function names (e.g., 'x' in 'dxs()')
+        -- \%([[:alnum:]_]*\s*(\)\@! means: not followed by optional word chars and '('
+        vim.cmd("silent! syntax match impetusIntrinsicVariable /\\%([[alnum:]_]\\)\\@<!" .. vim.pesc(var) .. "\\%([[:alnum:]_]*\\s*(\\)\\@!/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
       end
     end
   end
@@ -334,21 +335,20 @@ function M.apply_syntax_for_current_buffer()
     if has_sym_words then
       for _, word in ipairs(sym_words) do
         -- Symbols: case-sensitive (e.g. SC_jet is not the same as sc_jet in all contexts)
-        -- Exclude impetusIntrinsicFunctionCall to prevent matching inside function calls
-        vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\<" .. vim.pesc(word) .. "\\>/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword,impetusIntrinsicFunctionCall")
+        vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\<" .. vim.pesc(word) .. "\\>/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
       end
     end
     if has_sym_ops then
       for _, op in ipairs(sym_ops) do
         if op == "*" then
-          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\zs\\*\\ze\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword,impetusIntrinsicFunctionCall")
-          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\s\\zs\\*\\ze\\s\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword,impetusIntrinsicFunctionCall")
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\zs\\*\\ze\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\s\\zs\\*\\ze\\s\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
         elseif op == "-" then
-          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\s\\zs-\\ze\\s\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword,impetusIntrinsicFunctionCall")
-          vim.cmd("silent! syntax match impetusIntrinsicSymbol /[%)%]%w]\\zs-\\ze[%[(%w]/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword,impetusIntrinsicFunctionCall")
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\S\\s\\zs-\\ze\\s\\S/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /[%)%]%w]\\zs-\\ze[%[(%w]/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
         else
           local lit = (op:gsub("\\", "\\\\"):gsub("/", "\\/"))
-          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\V" .. lit .. "/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword,impetusIntrinsicFunctionCall")
+          vim.cmd("silent! syntax match impetusIntrinsicSymbol /\\V" .. lit .. "/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword")
         end
       end
     end
