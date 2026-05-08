@@ -27,10 +27,10 @@ syntax match impetusFieldName /^\s*[[:alnum:]_%%\[\]]\+\s*:\s*/ contains=impetus
 " Intrinsic categories (injected by Lua from intrinsic.k):
 " impetusIntrinsicFunction / impetusIntrinsicVariable / impetusIntrinsicSymbol
 
-" Define a syntax region for function call arguments to prevent variables from matching
-" inside function parentheses (e.g., prevent 'x' in 'dxs(...)' from being highlighted as variable)
-" Only mark the parentheses and content, not the function name itself
-syntax region impetusIntrinsicFunctionCall start=/[a-zA-Z_][a-zA-Z0-9_]*\s*\zs(/ end=/)/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword transparent
+" Define a syntax region for function calls to prevent variables from matching
+" inside function names and parentheses (e.g., prevent 'x' in 'dxs(...)' from being highlighted as variable)
+" The region covers function name + parentheses + content, but doesn't change their colors
+syntax region impetusIntrinsicFunctionCall matchgroup=NONE start=/\<[a-zA-Z_][a-zA-Z0-9_]*\s*(/ end=/)/ containedin=ALLBUT,impetusComment,impetusString,impetusKeyword transparent
 
 " Hard-code common intrinsic variables so they always highlight even if
 " intrinsic.k dynamic injection fails.
