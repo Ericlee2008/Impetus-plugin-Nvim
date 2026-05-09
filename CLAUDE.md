@@ -170,6 +170,30 @@ Lint diagnostics are computed on-save or on-demand (`:ImpetusLint`), not in real
      ```
      Note: Parameter names start at column 0 (flush-left), spaces added to the right to align all `=` signs
 
+### Parameter Substitution & Arithmetic Evaluation (`:re -b` command)
+   - **Expression evaluation system** in `commands.lua` (lines 1831-2106):
+     - `eval_expr_with_functions()` — Full recursive-descent expression evaluator with math functions (sin, cos, sqrt, etc.)
+     - `try_eval_numeric()` — Lightweight evaluator for simple arithmetic expressions
+     - Both use global evaluation caches (`eval_cache_func`, `eval_cache_fast`) to avoid redundant computation
+   - **Two-pass parameter replacement algorithm** (`replace_params_in_buffer()`, lines 2649-2961):
+     1. **First pass**: Substitute parameter references (`%Param`) with their current values, then evaluate parameter definitions themselves. Stores evaluated values in `current_vars` for use in subsequent rows.
+     2. **Second pass**: Simplify remaining numeric expressions using `simplify_numeric_text_fixed_point()` (fixed-point iteration up to 4 rounds) to fully resolve nested or chained expressions.
+   - **Cache clearing** (line 2659-2660): Evaluation caches are explicitly cleared at function entry to prevent stale cached failures from blocking re-evaluation across multiple `:re -b` invocations.
+   - **Quoted string detection** (throughout): Non-quoted values are evaluated; quoted strings (parameter descriptions, titles) are preserved as-is using pattern `value:match('^".*"$')`.
+   - **Selective row processing**: 
+     - *PARAMETER and *PARAMETER_DEFAULT blocks: Evaluated in first pass, optionally replaced in second pass (depending on `replace_defs` mode flag)
+     - *FUNCTION expression rows (row 2+ inside *FUNCTION blocks): Skip simplification (preserve coordinate variables like x, y, z)
+     - *INCLUDE file path rows: Skip simplification (preserve file path strings)
+     - ~repeat block rows: Skip simplification (preserve loop variables r1, r2, etc.)
+     - All other rows: Full substitution + evaluation
+   - **Example**:
+     ```
+     %Lg = 0.05
+     %H = -%Lg/2       # Substituted to: -%Lg/2 → -0.05/2 → -0.025 ✓
+     %R = %Lg * 4      # Substituted to: 0.05 * 4 → 0.2 ✓
+     %Area = [%H * %R] # Substituted to: [-0.025 * 0.2] → [-0.005] → -0.005 ✓
+     ```
+
 ### Bidirectional Reference Tracking with Unopened File Support
    - **New function**: `build_reverse_include_map()` (analysis.lua:2009) builds a reverse mapping of include relationships
      - Traverses all open impetus buffers recursively

@@ -2654,6 +2654,10 @@ local function replace_params_in_buffer(mode)
   local replace_defs = (mode == "all")
   local eval_fn = (mode == "all") and eval_expr_with_functions or try_eval_numeric
   local math_errors = {}
+
+  -- Clear evaluation caches to prevent stale cached failures from blocking re-evaluation
+  eval_cache_func = {}
+  eval_cache_fast = {}
   local function collect_eval_error(row, expr)
     if current_eval_error then
       table.insert(math_errors, { row = row, expr = expr or "", reason = current_eval_error })
