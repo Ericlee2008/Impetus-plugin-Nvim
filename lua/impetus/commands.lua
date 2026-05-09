@@ -2831,7 +2831,8 @@ local function replace_params_in_buffer(mode)
     local should_replace = not is_param_row or replace_defs
     local is_function_expr = function_expr_rows[i]
     local is_repeat_data = repeat_block_rows[i]
-    local do_arith = apply_arith and not is_function_expr and not is_repeat_data
+    local is_include_row = row_in_include[i]
+    local do_arith = apply_arith and not is_function_expr and not is_repeat_data and not is_include_row
 
     if should_replace then
       local t = trim(strip_number_prefix(line))
