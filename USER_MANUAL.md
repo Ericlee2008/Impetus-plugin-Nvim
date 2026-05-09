@@ -265,6 +265,7 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 - `*MAT_*`: `mid` / `id` required; all other fields lenient
 - `*PART`: `pid` required; `mid` required **unless** the `pid` is referenced by any `*GEOMETRY_PART`
 - `*OUTPUT`: First two fields (`Δt_imp`, `Δt_ascii`) required
+- `*OUTPUT_SENSOR`: `R` is checked only for `pid=DP` sensor rows when the file/include tree contains `*CFD...` or `*PARTICLE...` keywords
 - `*PARTICLE_DOMAIN`: `n_p` required unless `*GENERATE_PARTICLE_DISTRIBUTION` exists
 - Generic keywords: Fields marked "optional", having a `default`, or with explicit `options:` are not required
 

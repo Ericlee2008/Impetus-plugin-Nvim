@@ -524,6 +524,8 @@ Expand to 12+ checks across three severity tiers. See `USER_MANUAL.md` §6 for t
 
 A comprehensive validation suite that catches structural errors, semantic mismatches, and physical implausibilities before solver submission.
 
+`*OUTPUT_SENSOR` radius validation is context-aware: field `R` is skipped by the generic required-field loop and is validated only for `pid=DP` rows when the current file/include tree contains `*CFD...` or `*PARTICLE...` keywords. This prevents non-particle/non-CFD sensor output blocks from producing false "Missing required field 'R'" diagnostics.
+
 ### 13.5 Pros
 
 - **High value:** Prevents the most common categories of input-file errors.

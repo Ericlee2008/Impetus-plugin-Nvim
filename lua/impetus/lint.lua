@@ -1142,10 +1142,9 @@ local function check_required_fields(ctx, diagnostics)
                   local has_options = extract_options_from_desc(param_desc) ~= nil
                   local prev_val = fi > 1 and trim(fields[fi - 1] or "") or ""
                   local is_all_entity_id = (p:match("^enid") or p:match("^eid")) and prev_val:upper() == "ALL"
-                  -- R is required only when pid == "DP"
-                  if p == "r" then
-                    local pid_val = trim(fields[2] or ""):upper()
-                    is_optional = (pid_val ~= "DP")
+                  -- R is checked by the particle/CFD-specific radius rule below.
+                  if p:lower() == "r" then
+                    is_optional = true
                   end
                   if not is_optional and not has_options and not is_all_entity_id then
                     local val = trim(fields[fi] or "")
@@ -1164,30 +1163,33 @@ local function check_required_fields(ctx, diagnostics)
             end
           end
 
-          -- When pid == "DP", R (field 6) must be present and positive
-          for _, dr in ipairs(data_rows) do
-            local fields = split_csv_keep_empty(lines[dr])
-            local pid = trim(fields[2] or ""):upper()
-            if pid == "DP" then
-              local r_val = trim(fields[6] or "")
-              if r_val == "" or r_val == "-" then
-                push_diagnostic(
-                  diagnostics,
-                  dr - 1,
-                  0,
-                  SEV.ERROR,
-                  "Missing required field 'R' (sensor sampling radius) in *OUTPUT_SENSOR when pid=DP"
-                )
-              else
-                local r_num = to_number(r_val)
-                if r_num and r_num <= 0 then
+          -- When a particle/CFD model is present and pid == "DP", R (field 6)
+          -- must be present and positive.
+          if ctx.has_particle or ctx.has_cfd then
+            for _, dr in ipairs(data_rows) do
+              local fields = split_csv_keep_empty(lines[dr])
+              local pid = trim(fields[2] or ""):upper()
+              if pid == "DP" then
+                local r_val = trim(fields[6] or "")
+                if r_val == "" or r_val == "-" then
                   push_diagnostic(
                     diagnostics,
                     dr - 1,
-                    field_col_from_idx(lines[dr], 6),
+                    0,
                     SEV.ERROR,
-                    "Field 'R' (sensor sampling radius) must be positive when pid=DP in *OUTPUT_SENSOR"
+                    "Missing required field 'R' (sensor sampling radius) in *OUTPUT_SENSOR when pid=DP"
                   )
+                else
+                  local r_num = to_number(r_val)
+                  if r_num and r_num <= 0 then
+                    push_diagnostic(
+                      diagnostics,
+                      dr - 1,
+                      field_col_from_idx(lines[dr], 6),
+                      SEV.ERROR,
+                      "Field 'R' (sensor sampling radius) must be positive when pid=DP in *OUTPUT_SENSOR"
+                    )
+                  end
                 end
               end
             end
