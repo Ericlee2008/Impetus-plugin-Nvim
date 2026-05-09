@@ -2819,8 +2819,6 @@ local function replace_params_in_buffer(mode)
             value = num
           end
         end
-        -- Debug: log parameter processing
-        require("impetus.log").debug(string.format("PARAM L%d: %s = %s (after subst: %s)", i, name, value, before_subst))
         current_vars[name] = value
       end
     end
@@ -2860,18 +2858,11 @@ local function replace_params_in_buffer(mode)
             end)
             if cycle_detected then break end
             -- Replace %name
-            local before_param_replace = new_line
             new_line = new_line:gsub("%%([%a_][%w_]*)", function(n)
               local val = current_vars[n]
-              if val then
-                require("impetus.log").debug(string.format("SUBST L%d: %%%s → %s", i, n, val))
-                return val
-              end
+              if val then return val end
               return "%" .. n
             end)
-            if new_line ~= before_param_replace then
-              require("impetus.log").debug(string.format("REPLACE L%d: before=%s | after=%s", i, before_param_replace, new_line))
-            end
           end
           -- For re -b on definition rows: evaluate RHS of each assignment
           if is_param_row and replace_defs and do_arith then
@@ -2918,11 +2909,7 @@ local function replace_params_in_buffer(mode)
           end
           -- Simplify numeric expressions  (always simplify unless we're in 're -b' mode AND on a param row)
           if do_arith and new_line ~= line and not (mode == "all" and is_param_row) then
-            local before_simplify = new_line
             new_line = simplify_numeric_text_fixed_point(new_line, 4, eval_fn)
-            if new_line ~= before_simplify then
-              require("impetus.log").debug(string.format("SIMPLIFY L%d: %s → %s", i, before_simplify, new_line))
-            end
             collect_eval_error(i, new_line)
           end
           if new_line ~= line then
@@ -2940,12 +2927,13 @@ local function replace_params_in_buffer(mode)
   end
 
   -- Second pass for apply_arith: resolve nested numeric expressions
+  -- For re -b mode, also simplify parameter rows to ensure full evaluation
   if not cycle_detected and apply_arith then
     for i, line in ipairs(lines) do
-      if repeat_block_rows[i] or row_in_param[i] or row_in_include[i] or function_expr_rows[i] then
-        -- skip ~repeat block rows, parameter rows, *INCLUDE rows, and
-        -- *FUNCTION expression rows with solver variables such as epsp/x/t
-      else
+      -- Skip only: ~repeat blocks, *INCLUDE rows, and *FUNCTION expression rows
+      -- For re -b: DO simplify parameter rows (they may have had params replaced)
+      local skip_simplify = repeat_block_rows[i] or row_in_include[i] or function_expr_rows[i]
+      if not skip_simplify then
         local t = trim(strip_number_prefix(line))
         if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" then
           local new_line = simplify_numeric_text_fixed_point(line, 4, eval_fn)
