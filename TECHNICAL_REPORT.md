@@ -476,6 +476,10 @@ Replace `load()` with a **recursive-descent parser** (`eval_expr_fast`) that par
 
 `:re -a` on a 2000-line file with hundreds of parameter expressions completes in ~100 ms instead of ~3 s.
 
+Scientific notation formatting is preserved during replacement: plain literals such as `500e6` are no longer eagerly converted to `500000000`, and expressions containing scientific notation emit compact `e` notation where possible. The second simplify pass also skips `*FUNCTION` expression rows so solver variables such as `epsp` do not trigger partial numeric rewrites.
+
+Replace mode parsing now accepts additional Unicode dash variants and compacted flag text, and `:Re` is registered as a real alias for `:ImpetusReplaceParams`. The lowercase `:re` shortcut is also installed as a command-line abbreviation that expands to `:Re`, avoiding dependence on the `<CR>` interception path.
+
 ### 12.5 Pros
 
 - **Massive speedup:** ~30x faster on expression-heavy files.

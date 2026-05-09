@@ -1444,6 +1444,10 @@ end
 
 local function normalize_minus_variants(s)
   local t = s or ""
+  t = t:gsub(vim.fn.nr2char(0xFF0D), "-")
+  t = t:gsub(vim.fn.nr2char(0xFE63), "-")
+  t = t:gsub(vim.fn.nr2char(0x2010), "-")
+  t = t:gsub(vim.fn.nr2char(0x2011), "-")
   t = t:gsub(vim.fn.nr2char(0x2212), "-")
   t = t:gsub(vim.fn.nr2char(0x2013), "-")
   t = t:gsub(vim.fn.nr2char(0x2014), "-")
@@ -1554,6 +1558,39 @@ local function clean_numeric_result(v)
     return tostring(rounded_neg)
   end
   return nil
+end
+
+local function has_scientific_notation(src)
+  local s = src or ""
+  return s:find("%d[eE]%d") ~= nil or s:find("%d[eE][%+%-]%d") ~= nil
+end
+
+local function format_numeric_result(result, src)
+  local src_s = src or ""
+  local abs_v = math.abs(result)
+  local prefer_sci = has_scientific_notation(src_s)
+    or (abs_v ~= 0 and (abs_v >= 1e6 or abs_v < 1e-4))
+
+  local cleaned = clean_numeric_result(result)
+  if cleaned and (cleaned == "0" or not prefer_sci) then
+    return cleaned
+  end
+
+  if prefer_sci then
+    local s_num = string.format("%.8e", result)
+    local mant, exp = s_num:match("^(.-)e([%+%-]%d+)$")
+    if mant and exp then
+      mant = mant:gsub("(%..-)0+$", "%1")
+      mant = mant:gsub("%.$", "")
+      exp = exp:gsub("%+", "")
+      exp = exp:gsub("^(-?)0+(%d)", "%1%2")
+      if exp == "" then exp = "0" end
+      return mant .. "e" .. exp
+    end
+    return s_num
+  end
+
+  return string.format("%.15g", result)
 end
 
 -- Fast recursive-descent evaluator for simple arithmetic expressions.
@@ -1741,33 +1778,7 @@ local function eval_expr_fast(expr)
     return nil
   end
 
-  local cleaned = clean_numeric_result(result)
-  if cleaned then
-    eval_cache_fast[src] = { ok = true, value = cleaned }
-    return cleaned
-  end
-
-  local abs_v = math.abs(result)
-  local prefer_sci = src:find("%d[eE][+-]?%d") ~= nil
-    or (abs_v ~= 0 and (abs_v >= 1e6 or abs_v < 1e-4))
-  local out
-  if prefer_sci then
-    local s_num = string.format("%.8e", result)
-    local mant, exp = s_num:match("^(.-)e([%+%-]%d+)$")
-    if mant and exp then
-      mant = mant:gsub("(%..-)0+$", "%1")
-      mant = mant:gsub("%.$", "")
-      exp = exp:gsub("%+","")
-      exp = exp:gsub("^(-?)0+(%d)", "%1%2")
-      if exp == "" then exp = "0" end
-      out = mant .. "e" .. exp
-    else
-      out = s_num
-    end
-  else
-    out = string.format("%.15g", result)
-  end
-
+  local out = format_numeric_result(result, src)
   eval_cache_fast[src] = { ok = true, value = out }
   return out
 end
@@ -2089,33 +2100,7 @@ local function eval_expr_with_functions(expr)
     return nil
   end
 
-  local cleaned = clean_numeric_result(result)
-  if cleaned then
-    eval_cache_func[src] = { ok = true, value = cleaned }
-    return cleaned
-  end
-
-  local abs_v = math.abs(result)
-  local prefer_sci = src:find("%d[eE][+-]?%d") ~= nil
-    or (abs_v ~= 0 and (abs_v >= 1e6 or abs_v < 1e-4))
-  local out
-  if prefer_sci then
-    local s_num = string.format("%.8e", result)
-    local mant, exp = s_num:match("^(.-)e([%+%-]%d+)$")
-    if mant and exp then
-      mant = mant:gsub("(%..-)0+$", "%1")
-      mant = mant:gsub("%.$", "")
-      exp = exp:gsub("%+","")
-      exp = exp:gsub("^(-?)0+(%d)", "%1%2")
-      if exp == "" then exp = "0" end
-      out = mant .. "e" .. exp
-    else
-      out = s_num
-    end
-  else
-    out = string.format("%.15g", result)
-  end
-
+  local out = format_numeric_result(result, src)
   eval_cache_func[src] = { ok = true, value = out }
   return out
 end
@@ -2406,16 +2391,23 @@ local function is_plain_numeric_literal(expr)
   return not src:find("[^%d%+%-%.eE]")
 end
 
-local function simplify_numeric_text(text)
+local function is_scientific_numeric_literal(expr)
+  local src = trim(expr or "")
+  return is_plain_numeric_literal(src) and has_scientific_notation(src)
+end
+
+-- eval_fn: optional custom evaluator function (defaults to try_eval_numeric)
+local function simplify_numeric_text(text, eval_fn)
   local s = text or ""
   local eval_errors = {}
+  eval_fn = eval_fn or try_eval_numeric  -- Default to try_eval_numeric if not provided
 
   -- Special handling for control directives: simplify only the trailing expression
   -- e.g. ~repeat %a+1  →  ~repeat 12
   local directive, rest = trim(s):match("^(~%S+)%s+(.*)$")
   if directive and rest then
     if rest:find("[%d%+%-%*/%^%(%)%[%].]") then
-      local num = try_eval_numeric(rest)
+      local num = eval_fn(rest)
       if current_eval_error then
         current_eval_error = nil
       end
@@ -2428,7 +2420,7 @@ local function simplify_numeric_text(text)
 
   -- Simplify bracket expressions
   s = s:gsub("%[([^%[%]]-)%]", function(expr)
-    local num = try_eval_numeric(expr)
+    local num = eval_fn(expr)
     if current_eval_error then
       table.insert(eval_errors, current_eval_error)
       current_eval_error = nil
@@ -2449,7 +2441,7 @@ local function simplify_numeric_text(text)
     local ft = trim(field)
     if ft ~= "" and not is_plain_numeric_literal(ft) and not ft:match('^".*"$') and not ft:find("=")
        and not ft:match("^~") and ft:find("[%d%+%-%*/%^%(%)%[%].]") then
-      local num = try_eval_numeric(ft)
+      local num = eval_fn(ft)
       if current_eval_error then
         table.insert(eval_errors, current_eval_error)
         current_eval_error = nil
@@ -2495,7 +2487,7 @@ local function simplify_numeric_text(text)
   local whole = trim(s)
   if whole ~= "" and whole:find(",", 1, true) == nil and not is_plain_numeric_literal(whole)
      and whole:find("[%d%+%-%*/%^%(%)%[%].]") then
-    local num = try_eval_numeric(whole)
+    local num = eval_fn(whole)
     if current_eval_error then
       table.insert(eval_errors, current_eval_error)
       current_eval_error = nil
@@ -2520,11 +2512,11 @@ local function simplify_numeric_text(text)
   return s
 end
 
-local function simplify_numeric_text_fixed_point(text, max_passes)
+local function simplify_numeric_text_fixed_point(text, max_passes, eval_fn)
   local s = text or ""
   local passes = max_passes or 4
   for _ = 1, passes do
-    local next_s = simplify_numeric_text(s)
+    local next_s = simplify_numeric_text(s, eval_fn)
     if next_s == s then
       break
     end
@@ -2818,7 +2810,7 @@ local function replace_params_in_buffer(mode)
         -- Substitute vars in the RHS so stored value is already resolved
         value = substitute_vars(value)
         if cycle_detected then break end
-        if apply_arith then
+        if apply_arith and not is_scientific_numeric_literal(value) then
           local num = eval_fn(value)
           collect_eval_error(i, value)
           if num then
@@ -2901,18 +2893,20 @@ local function replace_params_in_buffer(mode)
                 local full_val = trim(raw_val:sub(1, effective_end))
                 if full_val ~= "" then
                   full_val = substitute_vars(full_val)
-                  local num = eval_fn(full_val)
-                  collect_eval_error(i, full_val)
-                  if num then
-                    new_line = new_line:sub(1, e) .. num .. tail
+                  if not is_scientific_numeric_literal(full_val) then
+                    local num = eval_fn(full_val)
+                    collect_eval_error(i, full_val)
+                    if num then
+                      new_line = new_line:sub(1, e) .. num .. tail
+                    end
                   end
                 end
               end
             end
           end
-          -- Simplify numeric expressions
-          if do_arith and new_line ~= line and (mode ~= "all" or not is_param_row) then
-            new_line = simplify_numeric_text_fixed_point(new_line, 4)
+          -- Simplify numeric expressions  (always simplify unless we're in 're -b' mode AND on a param row)
+          if do_arith and new_line ~= line and not (mode == "all" and is_param_row) then
+            new_line = simplify_numeric_text_fixed_point(new_line, 4, eval_fn)
             collect_eval_error(i, new_line)
           end
           if new_line ~= line then
@@ -2932,20 +2926,14 @@ local function replace_params_in_buffer(mode)
   -- Second pass for apply_arith: resolve nested numeric expressions
   if not cycle_detected and apply_arith then
     for i, line in ipairs(lines) do
-      if repeat_block_rows[i] or row_in_param[i] or row_in_include[i] then
-        -- skip ~repeat block rows, parameter rows, and *INCLUDE rows
+      if repeat_block_rows[i] or row_in_param[i] or row_in_include[i] or function_expr_rows[i] then
+        -- skip ~repeat block rows, parameter rows, *INCLUDE rows, and
+        -- *FUNCTION expression rows with solver variables such as epsp/x/t
       else
         local t = trim(strip_number_prefix(line))
         if t ~= "" and t:sub(1, 1) ~= "#" and t:sub(1, 1) ~= "$" then
-          local new_line = simplify_numeric_text_fixed_point(line, 4)
-          -- Skip error collection for *FUNCTION expression rows:
-          -- unknown variables (x, y, z, t) and crv()/fcn() calls are expected.
-          if not function_expr_rows[i] then
-            collect_eval_error(i, line)
-          else
-            -- Discard expected errors so they don't leak to subsequent rows
-            current_eval_error = nil
-          end
+          local new_line = simplify_numeric_text_fixed_point(line, 4, eval_fn)
+          collect_eval_error(i, line)
           if new_line ~= line then
             entries[#entries + 1] = {
               row = i,
@@ -3113,7 +3101,7 @@ local function show_cheatsheet_popup()
         { ":clean -s", "Simple beautify: align columns & normalize spacing (no delete)" },
         { ":re", "Replace custom params with values (basic ordered replace)" },
         { ":re -a", "Replace + evaluate numeric expressions" },
-        { ":re -b", "Replace all (defs+refs) + eval with intrinsic functions" },
+        { ":re -b / :Re -b", "Replace all (defs+refs) + eval with intrinsic functions" },
         { ":re -c", "Expand ~repeat blocks into concrete rows (re -a + unroll)" },
         { ":Cblock", "Check unmatched control block pairs" },
         { ":Update", "Force refresh index, lint, and ref marks" },
@@ -3444,19 +3432,20 @@ function M.register()
   end, {})
 
   local function parse_re_args(args_str)
-    local args = trim(args_str or "")
-    if args:find("%f[%S]%-c%f[%s]") ~= nil or args == "-c" then
+    local args = normalize_minus_variants(trim(args_str or ""))
+    local compact = args:lower():gsub("%s+", "")
+    if compact:find("-c", 1, true) ~= nil then
       return "repeat", "re -c"
-    elseif args:find("%f[%S]%-b%f[%s]") ~= nil or args == "-b" then
+    elseif compact:find("-b", 1, true) ~= nil then
       return "all", "re -b"
-    elseif args:find("%f[%S]%-a%f[%s]") ~= nil or args == "-a" then
+    elseif compact:find("-a", 1, true) ~= nil then
       return "arith", "re -a"
     else
       return "ref", "re"
     end
   end
 
-  vim.api.nvim_create_user_command("ImpetusReplaceParams", function(opts)
+  local function run_replace_command(opts)
     local mode, mode_str = parse_re_args(opts.args)
     local changed, entries = replace_params_in_buffer(mode)
     if changed == -1 then
@@ -3471,8 +3460,11 @@ function M.register()
       log_lines[#log_lines + 1] = string.format("         after : %s", trim(e.after))
     end
     local log_path = append_operation_log(mode_str, log_lines)
-    vim.notify("Impetus replace done. Updated lines: " .. tostring(changed) .. " | log: " .. vim.fn.fnamemodify(log_path, ":~:."), vim.log.levels.INFO)
-  end, { nargs = "*" })
+    vim.notify("Impetus replace done (" .. mode_str .. "). Updated lines: " .. tostring(changed) .. " | log: " .. vim.fn.fnamemodify(log_path, ":~:."), vim.log.levels.INFO)
+  end
+
+  vim.api.nvim_create_user_command("ImpetusReplaceParams", run_replace_command, { nargs = "*" })
+  vim.api.nvim_create_user_command("Re", run_replace_command, { nargs = "*" })
 
   vim.api.nvim_create_user_command("ImpetusOutline", function()
     local idx = analysis.build_buffer_index(0)
@@ -3792,6 +3784,8 @@ function M.register()
   end
 
   -- Command-line short forms
+  pcall(vim.cmd, "silent! cunabbrev re")
+  vim.cmd([[cnoreabbrev <expr> re getcmdtype() ==# ':' && getcmdline() =~# '^\s*re\>' ? 'Re' : 're']])
   pcall(vim.keymap.del, "c", "<CR>")
   vim.keymap.set("c", "<kMinus>", "-")
   vim.keymap.set("c", "<S-kMinus>", "-")
@@ -3812,7 +3806,7 @@ function M.register()
             log_lines[#log_lines + 1] = string.format("         after : %s", trim(e.after))
           end
           local log_path = append_operation_log(mode_str, log_lines)
-          vim.notify("Impetus replace done. Updated lines: " .. tostring(changed) .. " | log: " .. vim.fn.fnamemodify(log_path, ":~:."), vim.log.levels.INFO)
+          vim.notify("Impetus replace done (" .. mode_str .. "). Updated lines: " .. tostring(changed) .. " | log: " .. vim.fn.fnamemodify(log_path, ":~:."), vim.log.levels.INFO)
         end)
         return vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
       elseif cmd == "clean" then

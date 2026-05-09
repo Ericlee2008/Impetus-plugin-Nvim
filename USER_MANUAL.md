@@ -375,11 +375,13 @@ Before: 1, 1, [%L / 2]
 After : 1, 1, 50
 ```
 
-The evaluator is a fast recursive-descent parser supporting `+ - * / ^ ( )` and scientific notation. It runs up to 4 simplify passes to resolve nested expressions.
+The evaluator is a fast recursive-descent parser supporting `+ - * / ^ ( )` and scientific notation. It runs up to 4 simplify passes to resolve nested expressions. Plain scientific-notation parameter values such as `500e6` are preserved during substitution, and evaluated expressions that include scientific notation are kept in compact `e` form where possible.
 
 ### 9.3 `:re -b`
 
 **Replace all** (including `*PARAMETER` / `*PARAMETER_DEFAULT` definition rows) **and evaluate** with **intrinsic math functions** support.
+
+`:Re -b` is an explicit command alias for the same operation. The lowercase shortcut `:re -b` is expanded to `:Re -b` in the command line so it does not depend on a `<CR>` interception mapping. The completion notification includes the resolved mode, for example `re -b`, so you can confirm the flag was parsed.
 
 Supported functions: `sin`, `cos`, `tan`, `asin`, `atan`, `tanh`, `sinr`, `cosr`, `tanr`, `asinr`, `acosr`, `atanr`, `exp`, `ln`, `log`, `log10`, `sqrt`, `abs`, `sign`, `floor`, `ceil`, `round`, `mod`, `min`, `max`, `H` (Heaviside), `d` (Kronecker delta), `erf`. Constants: `pi`.
 
