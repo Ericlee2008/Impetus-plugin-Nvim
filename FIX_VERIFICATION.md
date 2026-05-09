@@ -1,14 +1,16 @@
 # `re -b` Command Fix — Verification Checklist
 
-## Fix Applied ✅
+## Fixes Applied ✅
 
-### Problem Statement
+### Fix #1: Cache Clearing (Primary Issue)
+
+**Problem Statement**:
 When running `:re -b` (replace parameters with full arithmetic evaluation), parameter expressions like `-%Lg/2` were being substituted to `-0.05/2` but **not** being calculated to the final value `-0.025`.
 
-### Root Cause Identified ✅
+**Root Cause Identified**:
 The evaluation caches (`eval_cache_func` and `eval_cache_fast`) persist across multiple `:re -b` calls. If an expression evaluation failed once (and was cached as failed), subsequent calls would return the cached failure instead of re-attempting evaluation.
 
-### Solution Implemented ✅
+**Solution Implemented** (Commit: c3d409e):
 **Location**: `lua/impetus/commands.lua`, lines 2659-2660
 
 ```lua
@@ -18,6 +20,30 @@ eval_cache_fast = {}
 ```
 
 Added at the start of `replace_params_in_buffer()` function to ensure fresh evaluation on each `:re -b` invocation.
+
+---
+
+### Fix #2: *INCLUDE Block Handling (Secondary Issue)
+
+**Problem Statement**:
+After applying Fix #1, the command was reporting errors like: `Unknown identifier 'specimen' in 'specimen.k'`
+
+**Root Cause Identified**:
+The first-pass arithmetic evaluation was not checking the `row_in_include` flag. When processing `*INCLUDE` blocks containing file paths like `specimen.k`, the code was attempting to evaluate them as arithmetic expressions, causing the file name to be parsed as an identifier, resulting in evaluation errors.
+
+**Solution Implemented** (Commit: c0a9d3d):
+**Location**: `lua/impetus/commands.lua`, line 2835
+
+```lua
+-- Before
+local do_arith = apply_arith and not is_function_expr and not is_repeat_data
+
+-- After
+local is_include_row = row_in_include[i]
+local do_arith = apply_arith and not is_function_expr and not is_repeat_data and not is_include_row
+```
+
+Added check for `is_include_row` to the first-pass `do_arith` condition, matching the same check already present in the second-pass simplification (line 2943). This prevents file paths in `*INCLUDE` blocks from being evaluated as expressions.
 
 ## Code Verification ✅
 
