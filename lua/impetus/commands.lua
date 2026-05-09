@@ -2810,7 +2810,8 @@ local function replace_params_in_buffer(mode)
         -- Substitute vars in the RHS so stored value is already resolved
         value = substitute_vars(value)
         if cycle_detected then break end
-        if apply_arith and not is_scientific_numeric_literal(value) then
+        -- Evaluate arithmetic expressions in parameter values (not just for re -b)
+        if apply_arith and not value:match('^".*"$') then
           local num = eval_fn(value)
           collect_eval_error(i, value)
           if num then
@@ -2893,7 +2894,8 @@ local function replace_params_in_buffer(mode)
                 local full_val = trim(raw_val:sub(1, effective_end))
                 if full_val ~= "" then
                   full_val = substitute_vars(full_val)
-                  if not is_scientific_numeric_literal(full_val) then
+                  -- Skip evaluation only if it's a quoted string (description)
+                  if not full_val:match('^".*"$') then
                     local num = eval_fn(full_val)
                     collect_eval_error(i, full_val)
                     if num then
