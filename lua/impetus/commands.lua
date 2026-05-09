@@ -2907,9 +2907,13 @@ local function replace_params_in_buffer(mode)
               end
             end
           end
-          -- Simplify numeric expressions  (always simplify unless we're in 're -b' mode AND on a param row)
-          if do_arith and new_line ~= line and not (mode == "all" and is_param_row) then
-            new_line = simplify_numeric_text_fixed_point(new_line, 4, eval_fn)
+          -- Simplify numeric expressions in all arithmetic lines
+          -- Skip only parameter rows in re -b mode (handled separately)
+          if do_arith and not (mode == "all" and is_param_row) then
+            local simplified = simplify_numeric_text_fixed_point(new_line, 4, eval_fn)
+            if simplified ~= new_line then
+              new_line = simplified
+            end
             collect_eval_error(i, new_line)
           end
           if new_line ~= line then
