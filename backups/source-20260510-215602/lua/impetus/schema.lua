@@ -821,13 +821,13 @@ function M.is_valid_data_line(keyword, row_index, line, entry)
       return is_path_like(line)
     end
     if row_index == 2 then
-      return #fields <= 8 and all_fields_match(fields, is_blank_or_expr)
+      return #fields == 8 and all_fields_match(fields, is_blank_or_expr)
     end
     if row_index == 3 then
-      return #fields <= 6 and all_fields_match(fields, is_blank_or_expr)
+      return #fields == 6 and all_fields_match(fields, is_blank_or_expr)
     end
     if row_index == 4 then
-      return #fields <= 7 and all_fields_match(fields, is_blank_or_expr)
+      return #fields == 7 and all_fields_match(fields, is_blank_or_expr)
     end
   end
 

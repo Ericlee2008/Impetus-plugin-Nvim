@@ -40,7 +40,6 @@ function Source:get_trigger_characters()
 end
 
 function Source:get_completions(context, resolve)
-  require("impetus.init").ensure_blink_sort_for_impetus()
   local line = context.line or vim.api.nvim_get_current_line()
   local cursor = context.cursor or { vim.api.nvim_win_get_cursor(0)[1], vim.api.nvim_win_get_cursor(0)[2] }
   local cur_col = cursor[2]

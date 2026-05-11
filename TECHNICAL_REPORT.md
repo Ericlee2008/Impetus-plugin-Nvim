@@ -26,9 +26,20 @@
 16. [Modification 15: Comprehensive English User Manual](#16-modification-15-comprehensive-english-user-manual)
 17. [Modification 16: Intrinsic Highlight Context Masks](#17-modification-16-intrinsic-highlight-context-masks)
 18. [Modification 17: Keyword Completion Star Context](#18-modification-17-keyword-completion-star-context)
-19. [Performance Analysis & Efficiency](#19-performance-analysis--efficiency)
-20. [Known Limitations & Future Work](#20-known-limitations--future-work)
-21. [Appendix A: Modified Files Index](#appendix-a-modified-files-index)
+19. [Modification 18: `,c` Toggle Comment Section-Divider Fix](#19-modification-18-c-toggle-comment-section-divider-fix)
+20. [Modification 19: `re -b` Implicit Block Boundary Fix](#20-modification-19-re--b-implicit-block-boundary-fix)
+21. [Modification 20: `eval_expr_fast` Character Class Fix](#21-modification-20-eval_expr_fast-character-class-fix)
+22. [Modification 21: `:Cc` `*CURVE` / `*FUNCTION` X-Ascending Check](#22-modification-21-cc-curve--function-x-ascending-check)
+23. [Modification 22: `clean -s` Unary Minus Space Bug Fix](#23-modification-22-clean-s-unary-minus-space-bug-fix)
+24. [Modification 23: Log File Session-Level Overwrite Policy](#24-modification-23-log-file-session-level-overwrite-policy)
+25. [Modification 24: Cross-File Parameter Substitution & Re-Assignment Fix](#25-modification-24-cross-file-parameter-substitution--re-assignment-fix)
+26. [Modification 25: `:re` Safety Guards — Cycle Detection, Overflow Prevention & Parameter-Row Handling](#26-modification-25-re-safety-guards--cycle-detection-overflow-prevention--parameter-row-handling)
+27. [Modification 26: Cross-File Object Index & `gd` Recursive Resolution](#27-modification-26-cross-file-object-index--gd-recursive-resolution)
+28. [Modification 27: Lint Engine Polish — Case Sensitivity, Highlight Range, & `*PARTICLE_DOMAIN` N_p Cross-File Optionality](#28-modification-27-lint-engine-polish--case-sensitivity-highlight-range--particle_domain-n_p-cross-file-optionality)
+29. [Modification 28: `*FUNCTION` Expression Partial Evaluation in `:re`](#29-modification-28-function-expression-partial-evaluation-in-re)
+30. [Performance Analysis & Efficiency](#30-performance-analysis--efficiency)
+31. [Known Limitations & Future Work](#31-known-limitations--future-work)
+31. [Appendix A: Modified Files Index](#appendix-a-modified-files-index)
 
 ---
 
@@ -476,7 +487,7 @@ Replace `load()` with a **recursive-descent parser** (`eval_expr_fast`) that par
 
 `:re -a` on a 2000-line file with hundreds of parameter expressions completes in ~100 ms instead of ~3 s.
 
-Scientific notation formatting is preserved during replacement: plain literals such as `500e6` are no longer eagerly converted to `500000000`, and expressions containing scientific notation emit compact `e` notation where possible. The second simplify pass also skips `*FUNCTION` expression rows so solver variables such as `epsp` do not trigger partial numeric rewrites.
+Scientific notation formatting is preserved during replacement: plain literals such as `500e6` are no longer eagerly converted to `500000000`, and expressions containing scientific notation emit compact `e` notation where possible. The partial evaluator now carries both numeric value and original token text, so `*FUNCTION` expressions with solver variables keep substituted scientific-notation parameters as scientific notation instead of formatting them as integers. The second simplify pass also skips `*FUNCTION` expression rows so solver variables such as `epsp` do not trigger partial numeric rewrites.
 
 Replace mode parsing now accepts additional Unicode dash variants and compacted flag text, and `:Re` is registered as a real alias for `:ImpetusReplaceParams`. The lowercase `:re` shortcut is also installed as a command-line abbreviation that expands to `:Re`, avoiding dependence on the `<CR>` interception path.
 
@@ -759,9 +770,619 @@ Typing `*` at the start of a keyword line, with optional indentation, still open
 
 ---
 
-## 19. Performance Analysis & Efficiency
+## 19. Modification 18: `,c` Toggle Comment Section-Divider Fix
 
-### 19.1 Current Performance Characteristics
+### 19.1 Background / Problem
+
+The `,c` mapping (`toggle_comment_block`) incorrectly treated bare-text divider comments such as `# Output`, `# Parts`, and `# Contact` as recoverable data rows. When a keyword block (e.g. `*FUNCTION` or `*MAT_RIGID`) contained these divider comments, pressing `,c` would:
+
+1. Fail to comment the entire block, or
+2. Uncomment only the divider lines while leaving actual data lines commented.
+
+Root causes were four separate code paths in `build_uncomment_row_set` that lacked a "looks like data" filter:
+
+- `collect_rows_for_smart_uncomment` (`expected_data <= 0` branch for unknown keywords)
+- `collect_rows_for_partial_block_uncomment` (for keywords with `expected_data > 1`)
+- `block_expected == 1` generic fallback
+- `*FUNCTION` / `*OUTPUT` / `*CURVE` special-case loop
+
+The most subtle root cause was `schema.is_code_like_expr`: its regex `^[%[%]%%%w_%+%-%*/%^%(%).,%s<>=!&|:]+$` accepts pure alphabetic words like `Output` because `%w` includes letters. This caused `collect_rows_for_partial_block_uncomment` to treat `# Output` as a valid `*FUNCTION` expression row.
+
+### 19.2 Solution
+
+Introduced a uniform `looks_like_data` guard across all four sources of `row_set`:
+
+```lua
+local looks_like_data = pt:find("[%d%+%-%*/%^%(%)%[%].,=]") ~= nil
+  or pt:match('^".*"$') ~= nil
+```
+
+A line is only considered a recoverable data row if it contains at least one digit, operator, bracket, comma, dot, or equals sign, or if it is a quoted string. Pure text words like `Output` or `Parts` are rejected.
+
+### 19.3 Implementation Path
+
+- **File:** `lua/impetus/actions.lua`
+- **Changes:**
+  1. `collect_rows_for_smart_uncomment` (`expected_data <= 0` branch): added `looks_like_data` check before `accept()` for unknown keywords.
+  2. `collect_rows_for_partial_block_uncomment`: added `looks_like_data` gate before `schema.is_valid_data_line` loop.
+  3. `block_expected == 1` generic segment: added `looks_like_data` check before `can_strictly_recover_line`.
+  4. `*FUNCTION` / `*OUTPUT` / `*CURVE` special-case loop: added `looks_like_data` check before `can_strictly_recover_line`.
+
+### 19.4 Result
+
+`,c` now correctly comments and uncomments entire `*FUNCTION`, `*MAT_RIGID`, and other keyword blocks regardless of whether they contain section-divider comments like `# Output` or `# Parts`.
+
+---
+
+## 20. Modification 19: `re -b` Implicit Block Boundary Fix
+
+### 20.1 Background / Problem
+
+The `:re` parameter-replacement engine (`replace_params_in_buffer`) uses `function_expr_rows` to skip `*FUNCTION` data lines during replacement. When a `*FUNCTION` block lacked an explicit `*END_FUNCTION` terminator, the engine failed to detect where the block ended. It continued marking subsequent non-`*FUNCTION` data rows (e.g. `*NODE` coordinates, `*ELEMENT` connectivity) as function expressions, causing them to be skipped during parameter replacement. This produced incomplete or incorrect `:re -b` results.
+
+### 20.2 Solution
+
+Added implicit block-end detection in the `function_expr_rows` scanner: when already inside a `*FUNCTION` block, encountering any new top-level keyword (a line matching `^%*[%u%d_%-]+`) that is not `*TABLE` or `*END_TABLE` automatically terminates the function block.
+
+```lua
+elseif in_function then
+  if t:match("^%*[%u%d_%-]+")
+     and not t:match("^%*TABLE%f[%A]")
+     and not t:match("^%*END_TABLE%f[%A]") then
+    in_function = false
+    function_data_count = 0
+  elseif not t:match("^%*") and ... then
+    function_data_count = ...
+  end
+end
+```
+
+### 20.3 Implementation Path
+
+- **File:** `lua/impetus/commands.lua`
+- **Changes:** `replace_params_in_buffer` — added the implicit-termination branch inside the `function_expr_rows` state machine.
+
+### 20.4 Result
+
+`:re -b` now correctly replaces parameters in files where `*FUNCTION` blocks omit `*END_FUNCTION`, without skipping subsequent keyword data rows.
+
+---
+
+## 21. Modification 20: `eval_expr_fast` Character Class Fix
+
+### 21.1 Background / Problem
+
+`eval_expr_fast` uses a quick-reject regex to fast-path simple numeric literals. The original character class `[^%d%+%-%*%/%^%(%)%.eE%s]` placed the hyphen `-` in the middle of the bracket expression, where Lua interprets it as a range operator (between `%+` and `%*`) rather than a literal hyphen. Consequently, the hyphen character itself was **not** matched by the negated class, causing expressions containing `-` (e.g. negative numbers or subtraction) to incorrectly fail the quick-reject test and fall through to the slower parser.
+
+### 21.2 Solution
+
+Moved the hyphen to the end of the character class (or next to another non-range position) so Lua treats it as a literal:
+
+```lua
+-- Before (broken):
+"[^%d%+%-%*%/%^%(%)%.eE%s]"
+
+-- After (fixed):
+"[^%d%.eE%s%+%-%*/%^%(%)%[%]]"
+```
+
+### 21.3 Implementation Path
+
+- **File:** `lua/impetus/commands.lua`
+- **Changes:** `eval_expr_fast` — corrected the quick-reject pattern.
+
+### 21.4 Result
+
+Expressions with negative signs or subtraction operators now pass the quick-reject test correctly, restoring the intended fast-path performance for simple numeric literals.
+
+---
+
+## 22. Modification 21: `:Cc` `*CURVE` / `*FUNCTION` X-Ascending Check
+
+### 22.1 Background / Problem
+
+The `:Cc` linter lacked validation for curve/function data point monotonicity. In Impetus, `*CURVE` and `*FUNCTION` data points must have strictly increasing x-coordinates. Violations are silent solver errors that are hard to catch manually in large files.
+
+### 22.2 Solution
+
+Added `check_curve_x_ascending` and `check_function_x_ascending` routines:
+
+1. **`split_fields_keep_empty(line)`** — new helper that splits on commas when present, otherwise on whitespace. Handles both `0, 100` and `0 100` formats.
+2. **Auto-detection of data start** for `*CURVE`: skips optional title/ID rows and locates the first line where both the first and second fields parse as numbers.
+3. **Strict x-ascending validation**: for every data point after the first, `current_x > previous_x` must hold. Violations emit `E1006` (x not ascending).
+
+### 22.3 Implementation Path
+
+- **File:** `lua/impetus/lint.lua`
+- **Changes:**
+  - Added `split_fields_keep_empty` helper.
+  - Added `*CURVE` x-ascending check with auto title/ID skip.
+  - Added `*FUNCTION` x-ascending check (parses numeric pairs from function expression lines when applicable).
+
+### 22.4 Result
+
+`:Cc` now reports `E1006` for any `*CURVE` or `*FUNCTION` block where x-coordinates are flat or decrease, including cases where title/ID rows precede the data.
+
+---
+
+## 23. Modification 22: `clean -s` Unary Minus Space Bug Fix
+
+### 23.1 Background / Problem
+
+The `:clean -s` command calls `normalize_expression_lines` to normalize spacing around operators (`+`, `-`, `*`, `/`, `^`). The original regex:
+
+```lua
+v:gsub("%s*([%+%-%*/])%s*", "%1")
+```
+
+treated every `-` as a binary subtraction operator and removed spaces on **both** sides. This incorrectly stripped the space after a comma that precedes a negative number:
+
+**Before:**
+```
+*DATABASE_HISTORY_BEAM
+D, X, 23, -0.5
+```
+
+**After `clean -s` (bug):**
+```
+*DATABASE_HISTORY_BEAM
+D, X, 23,-0.5
+```
+
+The comma-space before `-0.5` was lost because `%s*([%-])%s*` matched the space before `-` and the `-` itself, replacing them with just `-`.
+
+### 23.2 Solution
+
+Split the operator normalization into two rules:
+
+1. `+`, `*`, `/` — always binary, remove spaces on both sides:
+   ```lua
+   v:gsub("%s*([%+%*/])%s*", "%1")
+   ```
+
+2. `-` — only remove spaces when it is **binary subtraction** (both sides are identifier characters: word chars, `_`, or `%`). This preserves the space before a **unary minus** (e.g. `, -0.5`, `( -1`):
+   ```lua
+   v:gsub("([%w_%%])%s*%-%s*([%w_%%])", "%1-%2")
+   ```
+
+### 23.3 Implementation Path
+
+- **File:** `lua/impetus/commands.lua`
+- **Function:** `normalize_expression_lines`
+- **Lines:** replaced the single `[%+%-%*/]` regex with the two-step logic above.
+
+### 23.4 Result
+
+- `D, X, 23, -0.5` stays `D, X, 23, -0.5` after `clean -s` ✅
+- `a - b` still becomes `a-b` ✅
+- `%x - %y` still becomes `%x-%y` ✅
+- `10 - 5` still becomes `10-5` ✅
+
+---
+
+## 24. Modification 23: Log File Session-Level Overwrite Policy
+
+### 24.1 Background / Problem
+
+The operation log (`impetus_nvim.log`) originally used append mode (`"a"`), causing the file to grow indefinitely. It was then changed to overwrite mode (`"w"`), but this erased the log on every single command, making it impossible to review a sequence of operations performed in one session.
+
+### 24.2 Solution
+
+Introduced a session-level boolean flag `session_has_logged` in `log.lua`:
+
+- **First write** after Neovim startup → open with `"w"` (overwrite any previous session's log)
+- **Subsequent writes** in the same session → open with `"a"` (append)
+
+```lua
+local session_has_logged = false
+
+function M.append(operation, details)
+  local mode = session_has_logged and "a" or "w"
+  session_has_logged = true
+  local f = io.open(log_path, mode)
+  -- ...
+end
+```
+
+### 24.3 Implementation Path
+
+- **File:** `lua/impetus/log.lua`
+- **Changes:** added `session_has_logged` flag and mode selection logic.
+
+### 24.4 Result
+
+A single `impetus_nvim.log` now contains every operation performed in the current Neovim session, while still starting fresh when Neovim is restarted.
+
+---
+
+## 25. Modification 24: Cross-File Parameter Substitution & Re-Assignment Fix
+
+### 25.1 Background / Problem
+
+Two critical bugs in the `:re` parameter-replacement engine:
+
+**Bug 1 — Cross-file parameters not substituted.**
+When parameters were defined in an `*INCLUDE` file (e.g. `materials.k`) and referenced in the main file, `:re` silently failed to replace them. Root cause: `parse_assignments_from_line` only recognised the `name = value` syntax; Impetus standard `*PARAMETER` format uses comma separation (`name, value`). If the included file used comma format, `build_param_tables` collected nothing and `vars` was empty.
+
+**Bug 2 — Parameter re-assignment used stale values.**
+Parameters can be re-defined later in the same file:
+```
+*PARAMETER
+%a = 1
+%b = %a / 2
+%a = 23
+%c = %a * 2
+```
+`%b` must evaluate to `0.5` (using `%a = 1`), and `%c` must evaluate to `46` (using `%a = 23`). The old implementation stored raw text (`"%a / 2"`) in `vars` and performed substitution at replacement time using the **final** value of `%a` ("23"), so `%b` incorrectly became `23 / 2 = 11.5`.
+
+**Bug 3 — Silent failure on unreadable includes.**
+`read_lines_for_path` returned `nil` without any message when an `*INCLUDE` file could not be read, making the failure invisible to the user.
+
+### 25.2 Solution
+
+**Fix 1 — Dual-format parser.**
+Extended `parse_assignments_from_line` to try comma format (`name, value`) when no `=` assignments are found:
+```lua
+local comma_name = t:match("^%%?([%a_][%w_]*)%s*,")
+if comma_name then
+  local comma_pos = t:find(",")
+  local value = trim(t:sub(comma_pos + 1))
+  -- ...strip trailing description string...
+  return {{ name = comma_name, value = value }}
+end
+```
+
+**Fix 2 — Context-aware parameter collection.**
+Added `substitute_in_context` and a per-file `context` table inside `build_param_tables`. As parameters are scanned in definition order, each value is immediately resolved against the current context, then the context is updated. This freezes each parameter's value at the moment it is defined.
+
+```lua
+local function substitute_in_context(text, context)
+  local s = text or ""
+  s = s:gsub("%%([%a_][%w_]*)", function(n)
+    local val = context[n]
+    if val then return val end
+    return "%" .. n
+  end)
+  return s
+end
+
+-- Inside build_param_tables:
+local value = substitute_in_context(a.value, context)
+context[name] = value
+params[name] = value
+```
+
+Child-file parameters are merged into the parent context after the recursive call, so subsequent parent-file parameters can reference include-file parameters.
+
+**Fix 3 — Warn on unreadable includes.**
+```lua
+if p ~= "" then
+  vim.notify("Impetus: cannot read include file " .. p, vim.log.levels.WARN)
+end
+```
+
+### 25.3 Implementation Path
+
+- **File:** `lua/impetus/commands.lua`
+- **Changes:**
+  1. `parse_assignments_from_line` — added comma-format fallback branch.
+  2. `build_param_tables` — added `substitute_in_context` helper and `context` table; child vars merged into parent context.
+  3. `read_lines_for_path` — added `vim.notify` warning when file is unreadable.
+
+### 25.4 Result
+
+- Parameters defined in `*INCLUDE` files are now correctly collected regardless of whether they use `=` or `,` format.
+- Parameter re-assignment now evaluates each definition using the context at that exact line, so `%b = %a / 2` correctly uses `%a = 1` even when `%a` is later redefined as `23`.
+- Unreadable `*INCLUDE` paths now produce a visible Neovim warning instead of silently skipping.
+
+---
+
+## 26. Modification 25: `:re` Safety Guards — Cycle Detection, Overflow Prevention & Parameter-Row Handling
+
+### 26.1 Background / Problem
+
+The `:re` family of commands (`:re`, `:re -a`, `:re -b`) performs two complex transformations on the input deck:
+
+1. **Parameter substitution** — replacing `%name` references with their resolved values.
+2. **Arithmetic simplification** — evaluating `[expr]` brackets and numeric fields.
+
+Both operations run inside a Lua callback in Neovim, which shares a single address space with the editor. Several failure modes can exhaust that limited memory pool:
+
+#### Risk 1 — Circular Parameter References (Infinite Recursion)
+
+Parameters can reference each other:
+
+```
+*PARAMETER
+%a = %b
+%b = %a
+```
+
+If `substitute_vars` blindly expands `%a → %b → %a → %b …`, the recursion never terminates and Lua eventually crashes with a stack-overflow or `not enough memory` error.
+
+#### Risk 2 — Chain-Explosion String Overflow
+
+Even without a cycle, a long chain of parameter references can produce an exponentially growing string:
+
+```
+*PARAMETER
+%a1 = 1
+%a2 = %a1 + 1
+%a3 = %a2 + 1
+…
+%a1000 = %a999 + 1
+```
+
+Because `build_param_tables` freezes each parameter using `substitute_in_context` (single-pass substitution), `%a1000` becomes `"1 + 1 + … + 1"` (~2 000 chars). When a data row references `%a1000` alongside several other long parameters, a single `gsub` pass can allocate a multi-megabyte intermediate string.
+
+#### Risk 3 — Evaluator Closure Pressure on Large Files
+
+`simplify_numeric_text_fixed_point` iterates up to 4 times over every non-skipped line. On each iteration it calls `eval_fn` for every comma-separated field and every `[expr]` bracket. `eval_expr_with_functions` (used by `:re -b`) creates ~8 fresh closures per call (`parse_expr`, `parse_term`, `parse_power`, `parse_factor`, `skip_ws`, `parse_number`, `parse_identifier`, `parse_argument_list`). On a 10 000-line file this can generate hundreds of thousands of short-lived function objects. Without periodic garbage collection the Lua heap can fragment and an allocation fails with `not enough memory`.
+
+#### Risk 4 — Parameter Definition Rows Treated as Math Expressions
+
+The second pass of `replace_params_in_buffer` originally simplified **all** non-skipped lines, including parameter definition rows such as `R11 = 0`. `eval_expr_with_functions` parsed the left-hand side `R11` as an identifier, failed to find it in `CONSTANTS` or `MATH_FUNCS`, and emitted a false `Unknown identifier 'R11'` error. The replacement itself succeeded (the row was never meant to be evaluated), but the spurious error message confused users.
+
+### 26.2 Solution — Defence-in-Depth
+
+Five independent safety layers were added:
+
+#### Layer 1 — Recursive Depth Cap in `substitute_vars`
+
+```lua
+local function substitute_vars(text, depth, chain)
+  depth = depth or 0
+  if depth > 15 then
+    cycle_detected = true
+    cycle_params["__depth_limit__"] = true
+    return text
+  end
+  …
+end
+```
+
+A `chain` table tracks which parameter names are currently being expanded. If a name is encountered again while still on the stack, the cycle is detected immediately and the original `%name` token is returned unchanged.
+
+#### Layer 2 — String-Length Fuses (Three Places)
+
+| Location | Limit | Purpose |
+|----------|-------|---------|
+| `substitute_vars` | `MAX_SUBST_LEN = 5000` | Abort substitution if the intermediate string exceeds 5 000 chars (checked **after** bracket expansion **and** after `%name` expansion). |
+| `substitute_in_context` | `MAX_CONTEXT_LEN = 5000` | Prevent `build_param_tables` from producing unreasonably long frozen parameter values during the initial scan. |
+| `simplify_numeric_text` | `MAX_SIMPLIFY_LEN = 5000` | Skip arithmetic simplification entirely for any single line longer than 5 000 chars. |
+
+When a fuse trips, `cycle_detected` is set to `true`, the operation aborts gracefully, and a consolidated warning is shown to the user.
+
+#### Layer 3 — Periodic Garbage Collection
+
+```lua
+for i, line in ipairs(lines) do
+  if i % 1000 == 0 then
+    collectgarbage("collect")
+  end
+  …
+end
+```
+
+Both the first-pass row loop and the second-pass simplification loop force a full GC cycle every 1 000 rows. This prevents closure accumulation from becoming a hard memory failure on large decks.
+
+#### Layer 4 — Skip Parameter Rows in Second Pass
+
+```lua
+if row_in_param[i] then
+  skip_simplify = true
+end
+```
+
+Parameter definition rows are now excluded from the second `simplify_numeric_text_fixed_point` pass. They were already fully handled in the first pass (RHS evaluation + `%name` replacement), so the second pass was redundant and only produced the false `Unknown identifier` errors described in Risk 4.
+
+#### Layer 5 — `eval_cache_func` / `eval_cache_fast` Reset
+
+```lua
+eval_cache_func = {}
+eval_cache_fast = {}
+```
+
+At the start of every `replace_params_in_buffer` call both expression caches are wiped. This guarantees that a stale cached failure from a previous `:re` invocation cannot block legitimate evaluation in the current run.
+
+### 26.3 Implementation Path
+
+- **File:** `lua/impetus/commands.lua`
+- **Changes:**
+  1. `substitute_vars` — added post-`%name`-expansion length check; `MAX_SUBST_LEN` lowered from 10 000 → 5 000.
+  2. `substitute_in_context` — new `MAX_CONTEXT_LEN = 5000` guard.
+  3. `simplify_numeric_text` — new `MAX_SIMPLIFY_LEN = 5000` early-return.
+  4. `replace_params_in_buffer` first-pass loop — added `collectgarbage("collect")` every 1 000 rows.
+  5. `replace_params_in_buffer` second-pass loop — added `collectgarbage("collect")` every 1 000 rows; added `row_in_param[i]` skip.
+
+### 26.4 Result
+
+- Circular references (`%a = %b`, `%b = %a`) are detected and reported instead of crashing Neovim.
+- Long parameter chains cannot allocate multi-megabyte strings; the 5 000-char fuse aborts safely.
+- Large files (10 000+ lines) no longer trigger `not enough memory` due to closure pressure.
+- Parameter definition rows (`R11 = 0`, `Lg = 0.05`) no longer produce false `Unknown identifier` math errors.
+- `:re -a` and `:re -b` both behave predictably on decks of any realistic size.
+
+### 26.5 Why These Limits Were Chosen
+
+| Limit | Rationale |
+|-------|-----------|
+| 5 000 chars | LS-DYNA/Impetus data rows are rarely > 200 chars. A 5 000-char line is almost certainly an exploded parameter chain or an include-loop artifact. |
+| 15 recursion depth | Parameter chains deeper than 5–10 levels are extremely rare in practice. 15 provides a generous safety margin. |
+| GC every 1 000 rows | A full GC on 1 000 rows costs < 5 ms on modern hardware. On a 50 000-line file this adds ~250 ms — acceptable for preventing a hard crash. |
+
+---
+
+## 27. Modification 26: Cross-File Object Index & `gd` Recursive Resolution
+
+### 27.1 Background / Problem
+
+Three related issues affected cross-file object resolution:
+
+1. **Lost definitions in whitespace-delimited blocks.**  
+   The lightweight scanners `scan_object_defs_from_lines` and `scan_object_refs_from_lines` used simple `gmatch` on commas. Keywords such as `*PART` (which uses whitespace-separated fields) were silently skipped, causing cross-file `*PART` definitions to disappear from the index.
+
+2. **Inconsistent parsing between buffer and disk.**  
+   `build_cross_file_object_index` relied on ad-hoc line parsing for unloaded include files, while `build_buffer_index` used the full `parse_block_objects` pipeline. The two paths produced different results for the same file.
+
+3. **Single-level `gd` jump.**  
+   `object_definition` only iterated over direct includes. A definition nested two levels deep (e.g. `main.k → b.k → d.k`) was unreachable.
+
+### 27.2 Solution
+
+1. Introduced `build_file_index(lines, file_path)` in `analysis.lua`.  
+   It is a buffer-less, full-fidelity parser that reuses the same `parse_block_objects` logic as `build_buffer_index`, ensuring disk files and loaded buffers are parsed identically. All data rows are split with `split_data_fields`, which handles both comma-delimited and whitespace-delimited formats.
+
+2. Replaced lightweight scanners in `build_cross_file_object_index` with `build_file_index`.
+
+3. Rewrote `object_definition` to use a recursive `search_file(path)` helper.  
+   - Maintains a `searched[abs_path]` set to prevent infinite loops on cyclic includes.  
+   - Prefers loaded buffers over disk reads.  
+   - Caches parsed disk indices in `M._cross_file_object_cache` keyed by mtime.
+
+### 27.3 Implementation Path
+
+- **File:** `lua/impetus/analysis.lua`
+
+- **Key functions:**
+  ```lua
+  local function build_file_index(lines, file_path)
+    -- identical pipeline to build_buffer_index, but returns a plain table
+    -- instead of storing in buffer-local b:impetus_buffer_index
+  end
+
+  function M.object_definition(bufnr, obj_type, id)
+    -- 1. local buffer
+    -- 2. recursive search_file(path) with searched[] set
+    -- 3. other open buffers
+  end
+  ```
+
+- **Cache:** `M._cross_file_object_cache[abs_path] = { mtime = ..., defs = ..., refs = ..., includes = ... }`
+
+### 27.4 Result
+
+- Cross-file `*PART` definitions are now reliably indexed regardless of delimiter style.
+- `gd` on a part ID correctly resolves through arbitrary include nesting depth.
+- The cache eliminates redundant disk I/O on repeated jumps.
+
+### 27.5 Pros
+
+- **Unified parsing:** One code path for buffers and disk files.
+- **Scalable:** Recursion depth is bounded by the include tree, not artificially limited.
+
+### 27.6 Cons
+
+- **Slightly higher memory:** `build_file_index` allocates full tables per include file; mitigated by the mtime cache.
+
+---
+
+## 28. Modification 27: Lint Engine Polish — Case Sensitivity, Highlight Range, & `*PARTICLE_DOMAIN` N_p Cross-File Optionality
+
+### 28.1 Background / Problem
+
+1. **Case-sensitive keyword lookup.**  
+   Users sometimes write `*Part` or `*part`. The linter looked up `db[keyword]` directly and failed to find the entry, producing false `Unknown keyword` diagnostics.
+
+2. **Numeric highlight range too short.**  
+   `check_numeric_field` reported diagnostics with `end_col` defaulting to the start column, so the underline only covered the first digit of a multi-digit value such as `4000000`.
+
+3. **`*PARTICLE_DOMAIN` N_p optional check was file-local.**  
+   The `N_p` field is optional only when `*GENERATE_PARTICLE_DISTRIBUTION` exists *somewhere* in the deck. The original check only scanned `ctx.idx.keywords` (current file), so `N_p` was incorrectly flagged as missing when the generator lived in an included file.
+
+4. **Parameter-name normalization preserved original casing.**  
+   `normalize_param_name` returned the raw schema parameter name (e.g. `N_p`). Every hard-coded comparison in `lint.lua` used lower-case literals (`"n_p"`, `"enid"`, etc.), so checks for keywords whose schema used upper-case letters silently failed.
+
+5. **`:Cc` did not move cursor to diagnostics.**  
+   After running `:Cc`, users had to manually navigate to the first error or warning.
+
+6. **`parser.lua` lost multi-line `options` and leaked `#example` content into descriptions.**  
+   `parse_desc_lines` closed the `[options: ...]` bracket after the first line, so trailing options (e.g. `none` in `*PARAMETER` `quantity`) were omitted from the enum set. Additionally, `#example` / `#end` lines were skipped but `last_vars` was not cleared, causing example code to be appended to the preceding parameter description.
+
+7. **`clean -a` did not include `clean -s` beautification.**  
+   `-a` performed warm clean, advanced clean, and parameter alignment, but skipped the general-purpose formatting (comma spacing, expression normalization, `~repeat` indentation) that `-s` provides.
+
+### 28.2 Solution
+
+1. Normalized all `db[...]` lookups in `lint.lua` to `db[keyword:upper()]`.  
+   Affected paths: `check_unknown_keywords`, `check_field_counts`, `check_enum_values`, `check_required_fields`, and two helper lookups.
+
+2. Added `end_col = col + #val` to `check_numeric_field` so the diagnostic underline spans the full token.
+
+3. Extended `has_generate_particle` detection in `check_required_fields` to cover the entire include tree:
+   ```lua
+   local has_generate_particle = (ctx.cross_file_objects
+     and ctx.cross_file_objects.keywords
+     and ctx.cross_file_objects.keywords["*GENERATE_PARTICLE_DISTRIBUTION"]) or false
+   if not has_generate_particle then
+     -- fallback to current-file keywords
+   end
+   ```
+
+4. Changed `normalize_param_name` to always return lower-case, and updated `find_desc_for_param` to match descriptions case-insensitively.  
+   This fixes every parameter-name comparison simultaneously without touching each call site individually.
+
+5. Added post-lint cursor jump in `lint.run()`.  
+   After `vim.diagnostic.set`, diagnostics are sorted by severity (Error → Warning → Suspicion) and the cursor is moved to the first one:
+   ```lua
+   table.sort(diagnostics, function(a, b)
+     local sa = severity_order[a.severity] or 99
+     local sb = severity_order[b.severity] or 99
+     if sa ~= sb then return sa < sb end
+     if a.lnum ~= b.lnum then return a.lnum < b.lnum end
+     return a.col < b.col
+   end)
+   local target = diagnostics[1]
+   vim.api.nvim_win_set_cursor(0, { target.lnum + 1, target.col })
+   ```
+
+6. Fixed `parse_desc_lines` in `parser.lua` to keep multi-line `options` inside the bracket and to clear `last_vars` on `#example` / `#end` directives.  
+   Introduced `pending_key` tracking so continuation lines after `options:` are appended inside `[options: ...]` until the block ends or a new variable is declared. On any `#` / `$` line, `last_vars` and `pending_key` are reset and any open bracket is closed.
+
+7. Extended `clean -a` to call `simple_beautify_buffer()` after alignment, and added `normalize_desc_commas` to `align_parameter_definitions_comprehensive`.  
+   `normalize_desc_commas` walks the description string character-by-character, adding a space after every comma that lies **outside** quoted text. This turns `,"Part ID 1",0,none` into `, "Part ID 1", 0, none` while preserving commas inside quotes.
+
+### 28.3 Implementation Path
+
+- **Files:** `lua/impetus/lint.lua`, `lua/impetus/parser.lua`, `lua/impetus/commands.lua`
+
+- **Lines touched:**  
+  - `check_numeric_field` → added `end_col` parameter.  
+  - `check_required_fields` (`*PARTICLE_DOMAIN` branch) → cross-file `has_generate_particle` check.  
+  - Six `db[...]` sites → appended `:upper()`.  
+  - `normalize_param_name` → appended `:lower()`.  
+  - `find_desc_for_param` → case-insensitive lookup on both exact and base-name matches.  
+  - `lint.run()` tail → auto-jump to highest-severity diagnostic.  
+  - `parser.parse_desc_lines` → `pending_key` tracking for multi-line options; reset `last_vars` on `#` directives.  
+  - `commands.run_clean_command` (`-a` branch) → added `simple_beautify_buffer()` call.  
+  - `commands.align_parameter_definitions_comprehensive` → added `normalize_desc_commas` for quoted-description comma spacing.
+
+### 28.4 Result
+
+- `*Part`, `*PART`, and `*part` are treated identically by the linter.
+- Physics-suspicion underlines now cover complete numbers.
+- `*PARTICLE_DOMAIN` with empty `N_p` no longer produces a false positive when `*GENERATE_PARTICLE_DISTRIBUTION` resides in any included file.
+- Parameter-name comparisons now work regardless of schema casing (`N_p`, `ENID`, etc.).
+- `:Cc` automatically places the cursor on the most severe diagnostic.
+- `*PARAMETER` `quantity` enum checks now correctly recognise `none` (and all other multi-line options).
+- `#example` blocks in `commands.help` no longer pollute preceding parameter descriptions.
+- `:clean -a` now performs full beautification ( comma spacing, expression normalisation, `~repeat` indentation ) in addition to alignment.
+- `*PARAMETER` quoted descriptions are normalised with consistent comma spacing both before and after the quoted string.
+
+### 28.5 Pros
+
+- **Minimal intrusion:** Each fix is a localized, surgical change.
+- **Reuses existing infrastructure:** `cross_file_objects.keywords` was already populated by `build_cross_file_object_index`.
+
+### 28.6 Cons
+
+- None significant.
+
+---
+
+## 29. Performance Analysis & Efficiency
+
+### 29.1 Current Performance Characteristics
 
 | Operation                       | Typical Time (2k lines) | Bottleneck                                    |
 | ------------------------------- | ----------------------- | --------------------------------------------- |
@@ -773,7 +1394,7 @@ Typing `*` at the start of a keyword line, with optional indentation, still open
 | `:re -a` (replace + evaluate)   | 50–100 ms               | Expression evaluation + buffer rewrite        |
 | Info pane render                | 30–50 ms                | Tree formatting + highlight application       |
 
-### 19.2 Big-O Complexity
+### 29.2 Big-O Complexity
 
 | Function                        | Complexity     | Notes                                         |
 | ------------------------------- | -------------- | --------------------------------------------- |
@@ -784,7 +1405,7 @@ Typing `*` at the start of a keyword line, with optional indentation, still open
 | `check_physics_sanity`          | O(L × F)       | Physics check per numeric field               |
 | `eval_expr_fast`                | O(E)           | E = expression length; cached                 |
 
-### 19.3 Optimization Opportunities (Ranked by Impact)
+### 29.3 Optimization Opportunities (Ranked by Impact)
 
 1. **Disk I/O Cache (High Impact, Medium Effort)**
    
@@ -817,9 +1438,9 @@ Typing `*` at the start of a keyword line, with optional indentation, still open
 
 ---
 
-## 20. Known Limitations & Future Work
+## 30. Known Limitations & Future Work
 
-### 20.1 Current Limitations
+### 30.1 Current Limitations
 
 | #   | Limitation                                           | Severity | Workaround                                                       |
 | --- | ---------------------------------------------------- | -------- | ---------------------------------------------------------------- |
@@ -832,9 +1453,10 @@ Typing `*` at the start of a keyword line, with optional indentation, still open
 | 7   | No support for `~if` conditional object definitions  | Medium   | Objects inside `~if` blocks are always indexed                   |
 | 8   | `commands.help` parser is tolerant but not robust    | Low      | Ensure `commands.help` file is well-formed                       |
 | 9   | `eval_expr_fast` does not support math functions     | Low      | Use solver-side evaluation for complex expressions               |
-| 10  | Unit system aliases are hardcoded                    | Low      | Update `unit_system_aliases` when new systems are added          |
+| 10  | `*FUNCTION` partial eval strips internal arg spaces  | Low      | Cosmetic only; solver parses correctly                           |
+| 11  | Unit system aliases are hardcoded                    | Low      | Update `unit_system_aliases` when new systems are added          |
 
-### 20.2 Proposed Future Features
+### 30.2 Proposed Future Features
 
 1. **Global Object Registry Cache**
    
@@ -865,21 +1487,23 @@ Typing `*` at the start of a keyword line, with optional indentation, still open
 
 ## Appendix A: Modified Files Index
 
-| File                                    | Modifications                                                                                                                                                | Lines Added | Lines Removed |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- | ------------- |
-| `lua/impetus/analysis.lua`              | Cross-file param index, object index, `object_definition` fallback, `suggest_object_values` merge, zero-ID handling, `pid_offset` fix, optional-ID detection | ~400        | ~50           |
-| `lua/impetus/lint.lua`                  | 12 lint checks, physics sanity, enum validation, required fields, cross-file param checks, cross-file object checks, `*INCLUDE` path normalization           | ~800        | ~200          |
-| `lua/impetus/commands.lua`              | `eval_expr_fast`, `replace_params_in_buffer`, clean/replace logging, command aliases                                                                         | ~600        | ~150          |
-| `lua/impetus/actions.lua`               | `show_ref_completion` hardcoded options, option popup                                                                                                        | ~200        | ~50           |
-| `lua/impetus/side_help.lua`             | Optional-ID offset in help rendering                                                                                                                         | ~100        | ~20           |
-| `lua/impetus/info.lua`                  | Command tree folding, `foldexpr`, `,f` binding                                                                                                               | ~150        | ~20           |
-| `lua/impetus/intrinsic.lua`             | Context masks for intrinsic highlighting in `*INCLUDE`, `*PARAMETER`, and `*PARAMETER_DEFAULT` non-expression fields                                         | ~70         | 0             |
-| `lua/impetus/blink_source.lua`          | Suppress keyword completion for inline `*` outside keyword-line context                                                                                       | ~5          | 0             |
-| `lua/impetus/init.lua`                  | Restrict insert-mode `*` retrigger to keyword-line context                                                                                                    | ~1          | ~1            |
-| `lua/impetus/log.lua`                   | New file: unified logger                                                                                                                                     | ~40         | 0             |
-| `USER_MANUAL.md`                        | Comprehensive manual; intrinsic highlight context rules                                                                                                      | ~630        | 0             |
-| `README.md`                             | Updated features list                                                                                                                                        | ~10         | ~10           |
-| `IMPETUS_NVIM_COMMANDS_SHORTCUTS_v1.md` | Minor updates                                                                                                                                                | ~5          | ~5            |
+| File                                    | Modifications                                                                                                                                                                              | Lines Added | Lines Removed |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- | ------------- |
+| `lua/impetus/analysis.lua`              | Cross-file param index, object index, `object_definition` fallback, `suggest_object_values` merge, zero-ID handling, `pid_offset` fix, optional-ID detection, **`build_file_index` (unified buffer/disk parsing)**, **`gd` recursive nested-include search** | ~400        | ~50           |
+| `lua/impetus/lint.lua`                  | 12 lint checks, physics sanity, enum validation, required fields, cross-file param checks, cross-file object checks, `*INCLUDE` path normalization, `*CURVE`/`*FUNCTION` x-ascending check, **case-insensitive keyword lookup (`db[keyword:upper()]` on 6 paths)**, **`check_numeric_field` full-token highlight (`end_col = col + #val`)**, **`*PARTICLE_DOMAIN` N_p cross-file optional check**, **`normalize_param_name` lower-casing**, **`find_desc_for_param` case-insensitive match**, **`:Cc` auto-jump to highest-severity diagnostic** | ~850        | ~200          |
+| `lua/impetus/parser.lua`                | `parse_desc_lines` multi-line `options` tracking (`pending_key`); clear `last_vars` on `#example` / `#end` directives | ~30         | ~10           |
+| `lua/impetus/commands.lua`              | `replace_params_in_buffer` / `parse_assignments_from_line` description stripping; `:clean -a` calls `simple_beautify_buffer`; `align_parameter_definitions_comprehensive` `normalize_desc_commas` (quote-aware comma spacing) | ~650        | ~150          |
+| `lua/impetus/commands.lua`              | `eval_expr_fast`, `replace_params_in_buffer`, clean/replace logging, command aliases, `re -b` implicit `*FUNCTION` boundary, `eval_expr_fast` char-class fix, **`:re` safety guards** (cycle detection, overflow fuses, periodic GC, parameter-row skip in 2nd pass), **`*FUNCTION` partial evaluation** (`partial_eval_expr` on function-expression rows, comma-space formatting) | ~640        | ~150          |
+| `lua/impetus/actions.lua`               | `show_ref_completion` hardcoded options, option popup, `,c` toggle-comment section-divider fix (`looks_like_data` guard on 4 code paths)                                                   | ~230        | ~50           |
+| `lua/impetus/side_help.lua`             | Optional-ID offset in help rendering                                                                                                                                                       | ~100        | ~20           |
+| `lua/impetus/info.lua`                  | Command tree folding, `foldexpr`, `,f` binding                                                                                                                                             | ~150        | ~20           |
+| `lua/impetus/intrinsic.lua`             | Context masks for intrinsic highlighting in `*INCLUDE`, `*PARAMETER`, and `*PARAMETER_DEFAULT` non-expression fields                                                                       | ~70         | 0             |
+| `lua/impetus/blink_source.lua`          | Suppress keyword completion for inline `*` outside keyword-line context                                                                                                                    | ~5          | 0             |
+| `lua/impetus/init.lua`                  | Restrict insert-mode `*` retrigger to keyword-line context                                                                                                                                 | ~1          | ~1            |
+| `lua/impetus/log.lua`                   | New file: unified logger                                                                                                                                                                   | ~40         | 0             |
+| `USER_MANUAL.md`                        | Comprehensive manual; intrinsic highlight context rules                                                                                                                                    | ~630        | 0             |
+| `README.md`                             | Updated features list                                                                                                                                                                      | ~10         | ~10           |
+| `IMPETUS_NVIM_COMMANDS_SHORTCUTS_v1.md` | Minor updates                                                                                                                                                                              | ~5          | ~5            |
 
 ---
 

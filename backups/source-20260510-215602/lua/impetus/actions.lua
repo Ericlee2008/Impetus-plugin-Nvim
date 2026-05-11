@@ -1047,21 +1047,9 @@ local function find_block(buf, row)
     return nil
   end
   local end_row = #lines
-  -- For schema-mode keywords, cap block size using signature_rows so that
-  -- trailing data rows belonging to the next keyword block are not swallowed.
-  local block_entry = store.get_keyword(keyword)
-  local meta = schema.keyword_meta(keyword, block_entry)
-  local max_data_rows = (meta.repeat_mode == "schema" and block_entry)
-    and #(block_entry.signature_rows or {}) or 0
-  local max_end_row = start_row + max_data_rows
-
   for r = start_row + 1, #lines do
     if is_boundary_line(lines[r] or "") then
       end_row = r - 1
-      break
-    end
-    if max_data_rows > 0 and r > max_end_row then
-      end_row = max_end_row
       break
     end
   end
@@ -1112,23 +1100,12 @@ local function find_any_block(buf, row)
     return nil
   end
   local end_row = #lines
-  -- Cap block size for schema-mode keywords using signature_rows.
-  local block_entry = store.get_keyword(keyword)
-  local meta = schema.keyword_meta(keyword, block_entry)
-  local max_data_rows = (meta.repeat_mode == "schema" and block_entry)
-    and #(block_entry.signature_rows or {}) or 0
-  local max_end_row = start_row + max_data_rows
-
   for r = start_row + 1, #lines do
     local raw = lines[r] or ""
     local uncommented = uncomment_one_level(raw)
     local kw = parse_any_keyword(raw)
     if kw or is_control_directive_line(raw) or is_control_directive_line(uncommented) then
       end_row = r - 1
-      break
-    end
-    if max_data_rows > 0 and r > max_end_row then
-      end_row = max_end_row
       break
     end
   end
@@ -1552,41 +1529,6 @@ local function build_uncomment_row_set(lines, block)
     end
   end
 
-  -- For *INCLUDE blocks, only process the keyword line and actual include path
-  -- or data lines.  Do not touch commented data rows that belong to the next
-  -- keyword block but were swallowed by find_block's boundary detection.
-  if (block.keyword or ""):upper() == "*INCLUDE" then
-    local parse_inc = require("impetus.commands").parse_include_path_from_line
-    local inc_entry = store.get_keyword("*INCLUDE")
-    local limited = {}
-    for rr, _ in pairs(row_set) do
-      if rr == block.start_row then
-        limited[rr] = true
-      else
-        local raw = lines[rr] or ""
-        local preview = is_commented_line(raw) and uncomment_one_level(raw) or raw
-        local pt = trim(strip_number_prefix(preview))
-        if pt ~= "" and not is_preview_meta(preview) then
-          -- Accept valid include paths (row 1) or schema-valid data rows.
-          local ok = parse_inc(preview) ~= nil
-          if not ok then
-            local max_idx = math.max(1, (inc_entry and #(inc_entry.signature_rows or {}) or 0) + 1)
-            for idx = 1, max_idx do
-              if schema.is_valid_data_line("*INCLUDE", idx, pt, inc_entry) then
-                ok = true
-                break
-              end
-            end
-          end
-          if ok then
-            limited[rr] = true
-          end
-        end
-      end
-    end
-    return limited
-  end
-
   return row_set
 end
 
@@ -1891,6 +1833,41 @@ local function is_comment_or_empty(line)
   end
   local c = t:sub(1, 1)
   return c == "#" or c == "$"
+end
+
+local function parse_include_path_from_line(line)
+  local t = trim(strip_number_prefix(line or ""))
+  if t == "" then
+    return nil
+  end
+  t = trim((t:gsub("%s[#$].*$", "")))
+  if t == "" then
+    return nil
+  end
+  local q = t:match('"(.-)"')
+  if q and q ~= "" then
+    return trim(q)
+  end
+  -- Strong Windows absolute path handling (avoid truncating to drive letter).
+  if t:match("^[A-Za-z]:") then
+    local p = trim((t:match("^([A-Za-z]:[^,]*)") or t))
+    if p ~= "" then
+      return p
+    end
+  end
+  local wabs = t:match("([A-Za-z]:[\\/][^,%s]+%.[A-Za-z0-9_]+)")
+  if wabs and wabs ~= "" then
+    return trim(wabs)
+  end
+  local relf = t:match("([%w%._%-%/\\]+%.[A-Za-z0-9_]+)")
+  if relf and relf ~= "" then
+    return trim(relf)
+  end
+  local first = trim((t:match("^([^,]+)") or ""))
+  if first ~= "" then
+    return first
+  end
+  return nil
 end
 
 function M.toggle_comment_block()
@@ -2905,8 +2882,6 @@ function M.open_include_under_cursor()
 
   local lines = vim.api.nvim_buf_get_lines(buf, block.start_row - 1, block.end_row, false)
   local f = nil
-  local commands_mod = require("impetus.commands")
-  local parse_include_path = commands_mod.parse_include_path_from_line
   local function looks_invalid_include(v)
     local x = trim(v or "")
     if x == "" then
@@ -2918,34 +2893,19 @@ function M.open_include_under_cursor()
     return false
   end
 
-  -- Try cursor line first: most intuitive to open the file on the line under cursor.
-  local cursor_rel = row - block.start_row + 1
-  if cursor_rel >= 1 and cursor_rel <= #lines then
-    local cursor_line = lines[cursor_rel] or ""
-    if not is_comment_or_empty(cursor_line) then
-      local cand = parse_include_path(cursor_line)
-      if cand and not looks_invalid_include(cand) then
-        f = cand
-      end
-    end
-  end
-
-  -- Fallback: inline path in header.
-  if not f and #lines > 0 then
+  if #lines > 0 then
     local header = lines[1] or ""
     local inline = trim(strip_number_prefix(header)):match("^%*[%w_%-]+%s*,?%s*(.+)$")
-    local cand = parse_include_path(inline or "")
-    if cand and not looks_invalid_include(cand) then
-      f = cand
+    f = parse_include_path_from_line(inline or "")
+    if looks_invalid_include(f) then
+      f = nil
     end
   end
-
-  -- Fallback: first valid path in block.
   if not f then
     for i = 2, #lines do
       local l = lines[i] or ""
       if not is_comment_or_empty(l) then
-        local cand = parse_include_path(l)
+        local cand = parse_include_path_from_line(l)
         if cand and not looks_invalid_include(cand) then
           f = cand
           break

@@ -230,7 +230,7 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 
 ## 6. Lint (`:Ccheck`) — Model Validation
 
-`:Ccheck` (or `:Cc`, `:Chk`) runs **11 diagnostic checks** across three severity tiers. Results appear as Neovim diagnostics (virtual text + signs) and are stored in the `impetus-lint` namespace.
+`:Ccheck` (or `:Cc`, `:Chk`) runs **11 diagnostic checks** across three severity tiers. Results appear as Neovim diagnostics (virtual text + signs) and are stored in the `impetus-lint` namespace. After running, the cursor automatically jumps to the highest-severity diagnostic (Error → Warning → Suspicion).
 
 ### 6.1 Severity Tiers
 
@@ -266,7 +266,7 @@ All shortcuts are **buffer-local** and use `<localleader>` (default `,`). They d
 - `*PART`: `pid` required; `mid` required **unless** the `pid` is referenced by any `*GEOMETRY_PART`
 - `*OUTPUT`: First two fields (`Δt_imp`, `Δt_ascii`) required
 - `*OUTPUT_SENSOR`: `R` is checked only for `pid=DP` sensor rows when the file/include tree contains `*CFD...` or `*PARTICLE...` keywords
-- `*PARTICLE_DOMAIN`: `n_p` required unless `*GENERATE_PARTICLE_DISTRIBUTION` exists
+- `*PARTICLE_DOMAIN`: `n_p` required unless `*GENERATE_PARTICLE_DISTRIBUTION` exists anywhere in the include tree
 - Generic keywords: Fields marked "optional", having a `default`, or with explicit `options:` are not required
 
 ### 6.4 Optional ID Row Detection
@@ -345,7 +345,8 @@ Removes from the buffer:
 Runs `:clean -c` **plus**:
 
 - **Advanced prune**: Removes unknown keyword blocks entirely, strips leading/trailing blank lines inside known blocks
-- **Align parameters**: Formats `*PARAMETER` / `*PARAMETER_DEFAULT` blocks so `=` signs and trailing comments line up
+- **Align parameters**: Formats `*PARAMETER` / `*PARAMETER_DEFAULT` / `*CURVE` / `*TABLE` / `*PATH` / `*OBJECT` blocks so columns line up
+- **Beautify**: Applies all `-s` formatting (comma spacing, expression normalisation, keyword casing, `~repeat` indentation) without deleting any content
 
 After `:clean -a`, intrinsic syntax highlighting is reapplied.
 
@@ -376,6 +377,15 @@ After : 1, 1, 50
 ```
 
 The evaluator is a fast recursive-descent parser supporting `+ - * / ^ ( )` and scientific notation. It runs up to 4 simplify passes to resolve nested expressions. Plain scientific-notation parameter values such as `500e6` are preserved during substitution, and evaluated expressions that include scientific notation are kept in compact `e` form where possible.
+
+**`*FUNCTION` blocks:** Expression rows inside `*FUNCTION` receive *partial* evaluation. `%param` references are replaced, and pure numeric sub-expressions (e.g. `0.5*0.01`) are reduced to a single number, but solver variables (`t`, `x`, `y`, `z`) and custom function calls (`smooth_d`, `crv`, `fcn`) are preserved unchanged. Scientific-notation parameter values are kept in scientific notation during this partial evaluation, so `500e6` remains `500e6` in symbolic expressions.
+
+Example:
+
+```
+Before: smooth_d(12000, 0, 0.5*%tend)
+After : smooth_d(12000, 0, 5e-05)
+```
 
 ### 9.3 `:re -b`
 
@@ -558,7 +568,7 @@ All mutating operations are appended to **`impetus_nvim.log`** in the **current 
 | Command               | Logged Details                                                                       |
 | --------------------- | ------------------------------------------------------------------------------------ |
 | `:clean -c`           | Removed line count, each line's row, reason, and text                                |
-| `:clean -a`           | Warm + advanced removed counts, aligned parameter count, each line's row/reason/text |
+| `:clean -a`           | Warm + advanced removed counts, aligned count, beautified count, each line's row/reason/text |
 | `:re`                 | Changed line count, before/after for each modified line                              |
 | `:re -a`              | Same as `:re`, flagged with `mode=re -a`                                             |
 | `:re -b`              | Same as `:re`, flagged with `mode=re -b`                                             |
@@ -569,7 +579,7 @@ All mutating operations are appended to **`impetus_nvim.log`** in the **current 
 ```
 === clean -a 2026-04-20 14:30:00 ===
 File: E:\models\crash.k
-[summary] removed=42 (warm=30 adv=12)  PARAMETER aligned=5
+[summary] removed=42 (warm=30 adv=12)  aligned=5  beautified=18
 [warm clean]
   L15    blank         
   L23    comment       # old note
@@ -688,5 +698,5 @@ Missing include diagnostics use normalized absolute paths (`C:/path/to/file.k`) 
 4. **Structuring**: Use `,f` / `,F` to fold blocks. Use `,j` / `,k` to reorder blocks. Use `,c` to comment out experimental blocks.
 5. **Parameters**: Define reusable values in `*PARAMETER`. Use `:re` for plain substitution, `:re -a` to inline and evaluate numerically, or `:re -b` to also evaluate inside `*PARAMETER` blocks with intrinsic functions (`sin`, `H()`, etc.).
 6. **Validation**: Run `:Cc` periodically. Fix Errors first, then Warnings, then review Suspicions.
-7. **Cleanup**: Before exporting, run `:clean -a` to strip comments/blank lines, remove unknown blocks, and align parameter definitions.
+7. **Cleanup**: Before exporting, run `:clean -a` to strip comments/blank lines, remove unknown blocks, align parameter definitions, and apply general beautification.
 8. **Logging**: Check `impetus_nvim.log` in your project root for a full audit trail of all replacements and cleanups.

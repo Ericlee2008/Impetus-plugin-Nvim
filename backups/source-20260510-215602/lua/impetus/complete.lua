@@ -166,7 +166,6 @@ function M.complete(base)
 end
 
 function M.omnifunc(findstart, base)
-  require("impetus.init").ensure_blink_sort_for_impetus()
   if findstart == 1 then
     local line = vim.api.nvim_get_current_line()
     local col = vim.fn.col(".") - 1

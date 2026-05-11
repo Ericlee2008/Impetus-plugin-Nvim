@@ -495,8 +495,7 @@ local function collect_include_paths_from_lines(lines, base_dir)
       local t = trim(strip_number_prefix(raw or ""))
       if t ~= "" and not t:match("^[#$]") then
         local path = t:match('"(.-)"') or trim(t:match("^([^,]+)") or "")
-        -- Only collect lines that look like actual file paths (have an extension).
-        if path and path ~= "" and path:match("%.[A-Za-z0-9_]+$") then
+        if path and path ~= "" then
           if not path:match("^[A-Za-z]:") and not path:match("^[/\\]") then
             path = base_dir .. "/" .. path
           end
@@ -506,8 +505,7 @@ local function collect_include_paths_from_lines(lines, base_dir)
             paths[#paths + 1] = abs
           end
         end
-        -- Keep in_include true until the next keyword line resets it,
-        -- so that multi-path *INCLUDE blocks are fully collected.
+        in_include = false
       end
     end
   end

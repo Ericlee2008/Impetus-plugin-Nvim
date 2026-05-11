@@ -3918,7 +3918,7 @@ quantity       : Physical quantity
 		 time, stress, pressure, energy, power, acceleration, velocity, 
 		 temperature, force, torque, moment, impulse, momentum, density, 
 		 viscosity, srate, angledeg, anglerad, spindeg, spinrad, impint, 
-		 cstiff, sstiff, tstiff, sdstiff, hcap, hcond
+		 cstiff, sstiff, tstiff, sdstiff, hcap, hcond, none
 #example
     rho       = 7800, "density"
     nu        = 0.3,  "poisson's ratio"
@@ -3932,7 +3932,11 @@ Variable         Description
 description    : Optional parameter description
 rid            : Range ID for parameter manipulation in the GUI
 quantity       : Physical quantity
-                 options: mass, coordinate, length, displacement, area, volume, time, stress, pressure, energy, power, acceleration, velocity, temperature, force, torque, moment, impulse, momentum, density, viscosity, srate, angledeg, anglerad, spindeg, spinrad, impint, cstiff, sstiff, tstiff, sdstiff, hcap, hcond
+                 options: mass, coordinate, length, displacement, area, volume, 
+		 time, stress, pressure, energy, power, acceleration, velocity,
+		 temperature, force, torque, moment, impulse, momentum, density, 
+		 viscosity, srate, angledeg, anglerad, spindeg, spinrad, impint,
+		 cstiff, sstiff, tstiff, sdstiff, hcap, hcond, none, temp
 #example
     %A = 640.0e6, "default yield stress", 0, stress
     %B = 450.0e6, "default hardening parameter", 0, stress

@@ -1,17 +1,32 @@
+require("impetus.profile").startup_mark("init.lua begin")
 local config = require("impetus.config")
+require("impetus.profile").startup_mark("require config")
 local store = require("impetus.store")
+require("impetus.profile").startup_mark("require store")
 local commands = require("impetus.commands")
+require("impetus.profile").startup_mark("require commands")
 local hover = require("impetus.hover")
+require("impetus.profile").startup_mark("require hover")
 local complete = require("impetus.complete")
+require("impetus.profile").startup_mark("require complete")
 local lint = require("impetus.lint")
+require("impetus.profile").startup_mark("require lint")
 local highlight = require("impetus.highlight")
+require("impetus.profile").startup_mark("require highlight")
 local side_help = require("impetus.side_help")
+require("impetus.profile").startup_mark("require side_help")
 local actions = require("impetus.actions")
+require("impetus.profile").startup_mark("require actions")
 local info = require("impetus.info")
+require("impetus.profile").startup_mark("require info")
 local intrinsic = require("impetus.intrinsic")
+require("impetus.profile").startup_mark("require intrinsic")
 local intrinsic_hover = require("impetus.intrinsic_hover")
+require("impetus.profile").startup_mark("require intrinsic_hover")
 local analysis = require("impetus.analysis")
+require("impetus.profile").startup_mark("require analysis")
 local ref_marks = require("impetus.ref_marks")
+require("impetus.profile").startup_mark("require ref_marks")
 
 local M = {}
 local dev_state = {
@@ -29,7 +44,7 @@ local function get_blink()
   return blink
 end
 
-function M.ensure_blink_sort_for_impetus()
+local function ensure_blink_sort_for_impetus()
   if blink_sort_patched then
     return
   end
@@ -600,6 +615,7 @@ local function setup_filetype_behaviors()
   end
 
   local function refresh_main_visuals(buf)
+    local prof = require("impetus.profile")
     if not (buf and vim.api.nvim_buf_is_valid(buf)) then
       return
     end
@@ -619,6 +635,7 @@ local function setup_filetype_behaviors()
     -- Always re-apply highlight palette (cheap) so that colorschemes or other
     -- plugins that load after us cannot permanently override our groups.
     highlight.apply()
+    prof.mark("highlight.apply done", buf)
     -- Guard the heavier syntax/intrinsic work against redundant calls within the
     -- same changedtick (common when multiple autocmds fire on buffer open).
     local tick = vim.api.nvim_buf_get_changedtick(buf)
@@ -627,14 +644,13 @@ local function setup_filetype_behaviors()
     end
     vim.b[buf].impetus_last_visuals_tick = tick
     ensure_impetus_syntax(buf)
+    prof.mark("ensure_impetus_syntax done", buf)
     vim.b[buf].impetus_intrinsic_applied = 0
     intrinsic.apply_syntax_for_current_buffer()
+    prof.mark("intrinsic.apply_syntax done", buf)
     if config.get().ref_marks then
-      vim.defer_fn(function()
-        if vim.api.nvim_buf_is_valid(buf) then
-          ref_marks.update(buf)
-        end
-      end, 100)
+      ref_marks.update(buf)
+      prof.mark("ref_marks.update done", buf)
     end
   end
 
@@ -780,13 +796,8 @@ local function setup_filetype_behaviors()
   end
 
   local function attach_behaviors(buf)
-    -- 50ms cooldown: prevent redundant triggers from cascading autocmds.
-    local last = vim.b[buf].impetus_last_attach_ms or 0
-    local now = vim.uv.hrtime() / 1e6
-    if now - last < 50 then
-      return
-    end
-    vim.b[buf].impetus_last_attach_ms = now
+    local prof = require("impetus.profile")
+    prof.mark("attach_behaviors start", buf)
     ensure_impetus_filetype(buf)
     if vim.b[buf].impetus_help_buffer == 1 then
       return
@@ -800,16 +811,21 @@ local function setup_filetype_behaviors()
       vim.b[buf].impetus_fold_all_closed = 0
     end
 
+    ensure_blink_sort_for_impetus()
+    prof.mark("ensure_blink_sort done", buf)
     if not already_attached then
       refresh_main_visuals(buf)
+      prof.mark("refresh_main_visuals done", buf)
       if config.get().side_help_track then
         local line_count = vim.api.nvim_buf_line_count(buf)
         if line_count <= LARGE_FILE_LINES then
           side_help.attach_buffer(buf)
+          prof.mark("side_help.attach_buffer done", buf)
         end
       end
       if vim.b[buf].impetus_child_buffer ~= 1 then
         focus_first_keyword_once(buf)
+        prof.mark("focus_first_keyword_once done", buf)
       end
       vim.bo[buf].omnifunc = "v:lua.require'impetus.complete'.omnifunc"
     end
@@ -1075,16 +1091,26 @@ local function setup_filetype_behaviors()
 end
 
 function M.setup(opts)
+  -- Profiler: register first so [start] markers fire before other autocmds.
+  require("impetus.profile").setup()
+  require("impetus.profile").startup_mark("profile.setup done")
   config.setup(opts)
+  require("impetus.profile").startup_mark("config.setup done")
   commands.register()
+  require("impetus.profile").startup_mark("commands.register done")
   if config.get().side_help_track then
     side_help.setup()
+    require("impetus.profile").startup_mark("side_help.setup done")
   end
   info.setup()
+  require("impetus.profile").startup_mark("info.setup done")
   setup_dev_hot_reload()
+  require("impetus.profile").startup_mark("setup_dev_hot_reload done")
   setup_filetype_behaviors()
+  require("impetus.profile").startup_mark("setup_filetype_behaviors done")
   if config.get().ref_marks then
     ref_marks.setup()
+    require("impetus.profile").startup_mark("ref_marks.setup done")
   end
   -- Global fallback: keep `,h` usable even when focus is in info/help/nav windows.
   vim.keymap.set("n", ",h", function()
@@ -1095,8 +1121,10 @@ function M.setup(opts)
   end, { silent = true, desc = "Impetus help toggle (global)" })
   if config.get().auto_load then
     try_bootstrap_db()
+    require("impetus.profile").startup_mark("try_bootstrap_db done")
   end
   analysis.warmup_cross_file_cache()
+  require("impetus.profile").startup_mark("analysis.warmup_cross_file_cache done")
 end
 
 return M
